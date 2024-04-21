@@ -1,0 +1,59 @@
+name: patch
+
+on:
+  push:
+    branches: ["fp"]
+  workflow_dispatch:
+  schedule:
+      - cron: "0 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          path: "fp"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          path: "net"
+
+      - name: sync master and tags
+        run: |
+          cd net
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git remote add upstream https://github.com/golang/net
+          git checkout master
+          git pull upstream master --tags
+          git push origin master --tags
+
+      - name: patch
+        run: |
+          cd net
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag  | sort -V | xargs -I {} ../fp/patch.sh {} ../fp/patches/{}.patch
+          git push --all origin
+
+      - name: revision
+        run: |
+          cd fp
+          git fetch --all
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          [ -f revision.txt ] || touch revision.txt
+          git tag  | sort -V | xargs -I {} ./revision.sh {} ./revision.txt
+          git add revision.txt
+          if git commit -m "update revision"; then
+            git push origin fp
+          fi
