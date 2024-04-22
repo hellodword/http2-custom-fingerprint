@@ -9,7 +9,7 @@
 
 ## usage
 
-1. replace `golang.org/x/net` with `github.com/hellodword/http2-custom-fingerprint` in `go.mod`
+1. replace `golang.org/x/net` with `github.com/hellodword/http2-custom-fingerprint` in `go.mod`, you can find the generated versions in [`revision.txt`](./revision.txt)
 2. use custom functions in `http2.Transport`:
 
 ```go
