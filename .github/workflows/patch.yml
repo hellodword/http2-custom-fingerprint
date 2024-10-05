@@ -7,6 +7,9 @@ on:
   schedule:
       - cron: "0 3 * * *"
 
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: false
@@ -27,11 +30,15 @@ jobs:
           fetch-tags: true
           path: "net"
 
+      - name: config git
+        run: |
+          git config --global user.name github-actions[bot]
+          git config --global user.email 41898282+github-actions[bot]@users.noreply.github.com
+
       - name: sync master and tags
         run: |
           cd net
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
           git remote add upstream https://github.com/golang/net
           git checkout master
           git pull upstream master --tags
@@ -40,17 +47,36 @@ jobs:
       - name: patch
         run: |
           cd net
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          latest_tag="$(git describe --tags)"
+          if [ -z "$latest_tag" ]; then
+            echo "failed to get latest_tag"
+            exit 1
+          fi
+
+          if [ ! -f ../fp/patches/$latest_tag.patch ]; then
+            cd ../fp/patches
+
+            last_patch="$(ls | sort -V | tail -1)"
+            if [ -z "$last_patch" ]; then
+              echo "failed to get last_patch"
+              exit 1
+            fi
+            ln -s "$last_patch" $latest_tag.patch
+            git add $latest_tag.patch
+            git commit -m "chore: add $latest_tag.patch"
+
+            cd ../../net
+          fi
+
           git tag  | sort -V | xargs -I {} ../fp/patch.sh {} ../fp/patches/{}.patch
           git push --all origin
 
       - name: revision
         run: |
           cd fp
-          git fetch --all
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+          # git fetch --all
           [ -f revision.txt ] || touch revision.txt
           git tag  | sort -V | xargs -I {} ./revision.sh {} ./revision.txt
           git add revision.txt
