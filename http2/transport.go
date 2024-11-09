@@ -185,6 +185,11 @@ type Transport struct {
 	connPoolOrDef ClientConnPool // non-nil version of ConnPool
 
 	*transportTestHooks
+
+	CustomInitialSettings          func([]Setting) []Setting
+	CustomInitialTransportConnFlow func(uint32) uint32
+	CustomFirstHeadersFrameParam   func(HeadersFrameParam) HeadersFrameParam
+	CustomHeaders                  func([][2]string) [][2]string
 }
 
 // Hook points used for testing.
@@ -879,9 +884,16 @@ func (t *Transport) newClientConn(c net.Conn, singleUse bool) (*ClientConn, erro
 		initialSettings = append(initialSettings, Setting{ID: SettingHeaderTableSize, Val: maxHeaderTableSize})
 	}
 
+	if t.CustomInitialSettings != nil {
+		initialSettings = t.CustomInitialSettings(initialSettings)
+	}
 	cc.bw.Write(clientPreface)
 	cc.fr.WriteSettings(initialSettings...)
-	cc.fr.WriteWindowUpdate(0, uint32(conf.MaxUploadBufferPerConnection))
+	if t.CustomInitialTransportConnFlow != nil {
+		cc.fr.WriteWindowUpdate(0, t.CustomInitialTransportConnFlow(transportDefaultConnFlow))
+	} else {
+		cc.fr.WriteWindowUpdate(0, transportDefaultConnFlow)
+	}
 	cc.inflow.init(conf.MaxUploadBufferPerConnection + initialWindowSize)
 	cc.bw.Flush()
 	if cc.werr != nil {
@@ -1783,12 +1795,21 @@ func (cc *ClientConn) writeHeaders(streamID uint32, endStream bool, maxFrameSize
 		hdrs = hdrs[len(chunk):]
 		endHeaders := len(hdrs) == 0
 		if first {
-			cc.fr.WriteHeaders(HeadersFrameParam{
-				StreamID:      streamID,
-				BlockFragment: chunk,
-				EndStream:     endStream,
-				EndHeaders:    endHeaders,
-			})
+			if cc.t.CustomFirstHeadersFrameParam != nil {
+				cc.fr.WriteHeaders(cc.t.CustomFirstHeadersFrameParam(HeadersFrameParam{
+					StreamID:      streamID,
+					BlockFragment: chunk,
+					EndStream:     endStream,
+					EndHeaders:    endHeaders,
+				}))
+			} else {
+				cc.fr.WriteHeaders(HeadersFrameParam{
+					StreamID:      streamID,
+					BlockFragment: chunk,
+					EndStream:     endStream,
+					EndHeaders:    endHeaders,
+				})
+			}
 			first = false
 		} else {
 			cc.fr.WriteContinuation(streamID, endHeaders, chunk)
@@ -2185,7 +2206,9 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 	// separate pass before encoding the headers to prevent
 	// modifying the hpack state.
 	hlSize := uint64(0)
+	var headers [][2]string
 	enumerateHeaders(func(name, value string) {
+		headers = append(headers, [2]string{name, value})
 		hf := hpack.HeaderField{Name: name, Value: value}
 		hlSize += uint64(hf.Size())
 	})
@@ -2198,18 +2221,22 @@ func (cc *ClientConn) encodeHeaders(req *http.Request, addGzipHeader bool, trail
 	traceHeaders := traceHasWroteHeaderField(trace)
 
 	// Header list size is ok. Write the headers.
-	enumerateHeaders(func(name, value string) {
+	if cc.t.CustomHeaders != nil {
+		headers = cc.t.CustomHeaders(headers)
+	}
+	for i := range headers {
+		name, value := headers[i][0], headers[i][1]
 		name, ascii := lowerHeader(name)
 		if !ascii {
 			// Skip writing invalid headers. Per RFC 7540, Section 8.1.2, header
 			// field names have to be ASCII characters (just as in HTTP/1.x).
-			return
+			break
 		}
 		cc.writeHeader(name, value)
 		if traceHeaders {
 			traceWroteHeaderField(trace, name, value)
 		}
-	})
+	}
 
 	return cc.hbuf.Bytes(), nil
 }
