@@ -5,7 +5,7 @@ on:
     branches: ["fp"]
   workflow_dispatch:
   schedule:
-      - cron: "0 3 * * *"
+    - cron: "0 3 * * *"
 
 permissions:
   contents: write
@@ -80,6 +80,8 @@ jobs:
 
       - name: revision
         run: |
+          # wait for `git push`
+          sleep 60s
           cd fp
 
           [ -f revision.txt ] || touch revision.txt
