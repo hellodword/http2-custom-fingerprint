@@ -36,7 +36,7 @@ http2.Transport{
 		}
 		return hfp
 	},
-	CustomHeaders: func(s [][2]string) [][2]string {
+	CustomHeaders: func(s http.Header) http.Header {
 		fmt.Println("original Headers", s)
         // sort headers as you want
 		return s
