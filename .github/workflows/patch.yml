@@ -50,6 +50,8 @@ jobs:
 
       - name: patch
         run: |
+          set -x
+
           cd net
 
           latest_tag="$(git describe --tags)"
@@ -58,20 +60,20 @@ jobs:
             exit 1
           fi
 
-          if [ ! -f ../fp/patches/$latest_tag.patch ]; then
-            cd ../fp/patches
+          cd ../fp/patches
+          if [ ! -f "$latest_tag.patch" ]; then
 
             last_patch="$(ls | sort -V | tail -1)"
             if [ -z "$last_patch" ]; then
               echo "failed to get last_patch"
               exit 1
             fi
-            ln -s "$last_patch" $latest_tag.patch
-            git add $latest_tag.patch
+            ln -s "$last_patch" "$latest_tag.patch"
+            git add "$latest_tag.patch"
             git commit -m "chore: add $latest_tag.patch"
 
-            cd ../../net
           fi
+          cd ../../net
 
           git tag  | sort -V | xargs -I {} ../fp/patch.sh {} ../fp/patches/{}.patch
           git push --all origin
