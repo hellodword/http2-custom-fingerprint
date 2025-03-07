@@ -19,6 +19,7 @@ fi
 sha="$(git rev-parse --verify "origin/$branch")"
 [ -n "$sha" ]
 
+rm -rf /tmp/net-revision
 mkdir -p /tmp/net-revision
 pushd /tmp/net-revision
 go mod init x
