@@ -54,7 +54,7 @@ jobs:
 
           cd net
 
-          latest_tag="$(git describe --tags)"
+          latest_tag="$(git describe --tags "$(git rev-list --tags --max-count=1)")"
           if [ -z "$latest_tag" ]; then
             echo "failed to get latest_tag"
             exit 1
