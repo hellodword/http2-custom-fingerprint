@@ -49,3 +49,4 @@ replace golang.org/x/net v0.48.0 => github.com/hellodword/http2-custom-fingerpri
 replace golang.org/x/net v0.49.0 => github.com/hellodword/http2-custom-fingerprint v0.49.1-0.20260113033354-c9e40732b308
 replace golang.org/x/net v0.50.0 => github.com/hellodword/http2-custom-fingerprint v0.50.1-0.20260210035859-59f8e70d7a3e
 replace golang.org/x/net v0.51.0 => github.com/hellodword/http2-custom-fingerprint v0.51.1-0.20260226034945-c7c9135d1c62
+replace golang.org/x/net v0.52.0 => github.com/hellodword/http2-custom-fingerprint v0.52.1-0.20260312034905-e51b0286ff63
