@@ -104,11 +104,17 @@ func (w twriter) Write(p []byte) (n int, err error) {
 
 type serverTesterOpt string
 
-var optFramerReuseFrames = serverTesterOpt("frame_reuse_frames")
+var (
+	optFramerReuseFrames = serverTesterOpt("frame_reuse_frames")
 
-var optQuiet = func(server *http.Server) {
-	server.ErrorLog = log.New(io.Discard, "", 0)
-}
+	// optNoConn indicates that newServerTester should not create a connection.
+	// The test will create its own.
+	optNoConn = serverTesterOpt("no_conn")
+
+	optQuiet = func(server *http.Server) {
+		server.ErrorLog = log.New(io.Discard, "", 0)
+	}
+)
 
 func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}) *serverTester {
 	t.Helper()
@@ -120,6 +126,7 @@ func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}
 		ServerName:  "go.dev",
 		CipherSuite: tls.TLS_AES_128_GCM_SHA256,
 	}
+	noConn := false
 	for _, opt := range opts {
 		switch v := opt.(type) {
 		case func(*Server):
@@ -128,6 +135,13 @@ func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}
 			v(h1server)
 		case func(*tls.ConnectionState):
 			v(&tlsState)
+		case serverTesterOpt:
+			switch v {
+			case optNoConn:
+				noConn = true
+			default:
+				t.Fatalf("unhandled option %v", v)
+			}
 		default:
 			t.Fatalf("unknown newServerTester option type %T", v)
 		}
@@ -158,6 +172,10 @@ func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}
 		time.Sleep(GoAwayTimeout) // give server time to shut down
 	})
 
+	if noConn {
+		return st
+	}
+
 	connc := make(chan *ServerConn)
 	go func() {
 		h2server.TestServeConn(&netConnWithConnectionState{
@@ -180,6 +198,47 @@ func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}
 	}
 	synctest.Wait()
 	return st
+}
+
+// testServerConn is a single connection to a server.
+type testServerConn struct {
+	t       testing.TB
+	netconn *synctestNetConn
+	testConnFramer
+}
+
+func newTestServerConn(t testing.TB, nc *synctestNetConn) *testServerConn {
+	tc := &testServerConn{
+		t:       t,
+		netconn: nc,
+	}
+	tc.testConnFramer = testConnFramer{
+		t:   t,
+		fr:  NewFramer(nc, nc),
+		dec: hpack.NewDecoder(InitialHeaderTableSize, nil),
+	}
+	return tc
+}
+
+func (tc *testServerConn) writePreface() {
+	tc.t.Helper()
+	n, err := tc.netconn.Write([]byte(ClientPreface))
+	if err != nil {
+		tc.t.Fatalf("Error writing client preface: %v", err)
+	}
+	if n != len(ClientPreface) {
+		tc.t.Fatalf("Writing client preface, wrote %d bytes; want %d", n, len(ClientPreface))
+	}
+}
+
+func (tc *testServerConn) greet() {
+	tc.t.Helper()
+	tc.writePreface()
+	tc.wantFrameType(FrameSettings)
+	tc.wantFrameType(FrameWindowUpdate)
+	tc.writeSettings()
+	tc.wantFrameType(FrameSettings) // ACK
+	tc.writeSettingsAck()
 }
 
 type netConnWithConnectionState struct {
