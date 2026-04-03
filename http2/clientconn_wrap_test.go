@@ -20,13 +20,26 @@ const wrappedAPI = true
 type httpClientConn = http.ClientConn
 
 func newTestClientConn(t testing.TB, opts ...any) *testClientConn {
-	t.Fatal("TODO")
-	return nil
+	t.Helper()
+	tt := newTestTransport(t, opts...)
+	cc, err := tt.tr1.NewClientConn(t.Context(), "http", "localhost:80")
+	if err != nil {
+		t.Fatalf("NewClientConn: %v", err)
+	}
+
+	tc := tt.getConn()
+	tc.cc1 = cc
+	return tc
 }
 
 func (tr *testTransport) maybeAddNewClientConnHook() {
 }
 
 func (tc *testClientConn) doRoundTrip(req *http.Request, f func(streamID uint32)) (*http.Response, error) {
-	return nil, errors.New("TODO")
+	tc.t.Helper()
+	if tc.cc1 == nil {
+		tc.t.Errorf("RoundTrip on testClientConn with no ClientConn (did you mean to use the testTransport?)")
+		return nil, errors.New("no ClientConn")
+	}
+	return tc.cc1.RoundTrip(req)
 }

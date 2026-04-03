@@ -9,7 +9,8 @@ package http2
 import "net/http"
 
 func (t *Transport) TestTransport() *http.Transport {
-	return nil
+	t.init()
+	return t.t1
 }
 
 func (s *Server) TestSetNewConnFunc(f func(*ServerConn)) {

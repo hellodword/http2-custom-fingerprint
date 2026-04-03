@@ -52,10 +52,13 @@ func testTestClientConn(t testing.TB) {
 	req, _ := http.NewRequest("PUT", "https://dummy.tld/", body)
 	rt := tc.roundTrip(req)
 
+	// Note: rt.streamID can give the stream ID, but not when using http2wrap.
+	streamID := uint32(1)
+
 	// tc has a number of methods to check for expected frames sent.
 	// Here, we look for headers and the request body.
 	tc.wantHeaders(wantHeader{
-		streamID:  rt.streamID(),
+		streamID:  streamID,
 		endStream: false,
 		header: http.Header{
 			":authority": []string{"dummy.tld"},
@@ -65,7 +68,7 @@ func testTestClientConn(t testing.TB) {
 	})
 	// Expect 10 bytes of request body in DATA frames.
 	tc.wantData(wantData{
-		streamID:  rt.streamID(),
+		streamID:  streamID,
 		endStream: true,
 		size:      10,
 		multiple:  true,
@@ -73,7 +76,7 @@ func testTestClientConn(t testing.TB) {
 
 	// tc.writeHeaders sends a HEADERS frame back to the client.
 	tc.writeHeaders(HeadersFrameParam{
-		StreamID:   rt.streamID(),
+		StreamID:   streamID,
 		EndHeaders: true,
 		EndStream:  true,
 		BlockFragment: tc.makeHeaderBlockFragment(
@@ -568,10 +571,6 @@ type testPendingClientConn struct {
 }
 
 func newTestTransport(t testing.TB, opts ...any) *testTransport {
-	if wrappedAPI {
-		t.Fatal("TODO")
-	}
-
 	tt := &testTransport{
 		t:    t,
 		li:   newSynctestNetListener(),
@@ -594,21 +593,29 @@ func newTestTransport(t testing.TB, opts ...any) *testTransport {
 	case roundTripXNetHTTP2:
 		tr = &Transport{
 			DialTLSContext: func(ctx context.Context, network, address string, tlsConf *tls.Config) (net.Conn, error) {
+				if tt.useTLS {
+					return tls.Client(tt.li.newConn(), tlsConf), nil
+				}
 				return tt.li.newConn(), nil
 			},
-			AllowHTTP: true,
-		}
-	case roundTripNetHTTP:
-		tr1 = &http.Transport{
-			DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-				return tt.li.newConn(), nil
-			},
-			Protocols:       &http.Protocols{},
 			TLSClientConfig: testTLSClientConfig,
+			AllowHTTP:       true,
 		}
-		tr1.Protocols.SetHTTP2(true)
-		tr1.Protocols.SetUnencryptedHTTP2(true)
-		t.Cleanup(tr1.CloseIdleConnections)
+		tr1 = tr.TestTransport()
+	case roundTripNetHTTP:
+		tr1 = &http.Transport{}
+	}
+
+	tr1.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return tt.li.newConn(), nil
+	}
+	tr1.TLSClientConfig = testTLSClientConfig
+	tr1.Protocols = &http.Protocols{}
+	tr1.Protocols.SetHTTP2(true)
+	tr1.Protocols.SetUnencryptedHTTP2(true)
+	t.Cleanup(tr1.CloseIdleConnections)
+
+	if tt.mode == roundTripNetHTTP {
 		var err error
 		tr, err = ConfigureTransports(tr1)
 		if err != nil {
