@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build go1.26
+//go:build go1.26 && !(go1.27 && http2wrap)
+
+// Go 1.26 and later: http.ClientConn available.
 
 package http2_test
 
@@ -39,5 +41,13 @@ func newTestClientConn(t testing.TB, opts ...any) *testClientConn {
 		return tt.getConn()
 	default:
 		panic("unknown test mode")
+	}
+}
+
+func (tc *testClientConn) doRoundTrip(req *http.Request, f func(streamID uint32)) (*http.Response, error) {
+	if tc.cc1 != nil {
+		return tc.cc1.RoundTrip(req)
+	} else {
+		return tc.cc.TestRoundTrip(req, f)
 	}
 }

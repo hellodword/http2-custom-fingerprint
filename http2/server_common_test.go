@@ -176,21 +176,29 @@ func newServerTester(t testing.TB, handler http.HandlerFunc, opts ...interface{}
 		return st
 	}
 
-	connc := make(chan *ServerConn)
+	var connc chan *ServerConn
+	if !wrappedAPI {
+		connc = make(chan *ServerConn)
+		h2server.TestSetNewConnFunc(func(sc *ServerConn) {
+			connc <- sc
+			close(connc) // panic if we unexpectedly get a second conn
+		})
+	}
+
 	go func() {
-		h2server.TestServeConn(&netConnWithConnectionState{
+		h2server.ServeConn(&netConnWithConnectionState{
 			Conn:  srv,
 			state: tlsState,
 		}, &ServeConnOpts{
 			Handler:    handler,
 			BaseConfig: h1server,
-		}, func(sc *ServerConn) {
-			connc <- sc
 		})
 	}()
-	st.sc = <-connc
 
-	st.fr = NewFramer(st.cc, st.cc)
+	if !wrappedAPI {
+		st.sc = <-connc
+	}
+
 	st.testConnFramer = testConnFramer{
 		t:   t,
 		fr:  NewFramer(st.cc, st.cc),

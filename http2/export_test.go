@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !(go1.27 && http2wrap)
+
 package http2
 
 import (
@@ -12,7 +14,6 @@ import (
 	"net/textproto"
 	"sync"
 	"testing"
-	"time"
 
 	"golang.org/x/net/http2/hpack"
 	"golang.org/x/net/internal/httpcommon"
@@ -22,9 +23,7 @@ const (
 	DefaultMaxReadFrameSize     = defaultMaxReadFrameSize
 	DefaultMaxStreams           = defaultMaxStreams
 	InflowMinRefresh            = inflowMinRefresh
-	InitialHeaderTableSize      = initialHeaderTableSize
 	InitialMaxConcurrentStreams = initialMaxConcurrentStreams
-	InitialWindowSize           = initialWindowSize
 	MaxFrameSize                = maxFrameSize
 	MaxQueuedControlFrames      = maxQueuedControlFrames
 	MinMaxFrameSize             = minMaxFrameSize
@@ -60,6 +59,10 @@ var (
 
 func (s *Server) TestServeConn(c net.Conn, opts *ServeConnOpts, newf func(*serverConn)) {
 	s.serveConn(c, opts, newf)
+}
+
+func (s *Server) TestSetNewConnFunc(f func(*serverConn)) {
+	s.state.testNewConn = f
 }
 
 func (sc *serverConn) TestFlowControlConsumed() (consumed int32) {
@@ -126,7 +129,7 @@ func (t *Transport) TestTransport() *http.Transport {
 func (cc *ClientConn) TestNetConn() net.Conn     { return cc.tconn }
 func (cc *ClientConn) TestSetNetConn(c net.Conn) { cc.tconn = c }
 func (cc *ClientConn) TestRoundTrip(req *http.Request, f func(stremaID uint32)) (*http.Response, error) {
-	return cc.roundTrip(req, func(cs *clientStream) {
+	return cc.internalRoundTrip(req, func(cs *clientStream) {
 		f(cs.ID)
 	})
 }
@@ -164,10 +167,6 @@ func (fr *Framer) TestSetDebugWriteLoggerf(f func(string, ...any)) {
 	fr.debugWriteLoggerf = f
 }
 
-func SummarizeFrame(f Frame) string {
-	return summarizeFrame(f)
-}
-
 func SetTestHookGetServerConn(t testing.TB, f func(*serverConn)) {
 	SetForTest(t, &testHookGetServerConn, f)
 }
@@ -198,8 +197,6 @@ func SetDisableExtendedConnectProtocol(t testing.TB, v bool) {
 
 func LogFrameReads() bool  { return logFrameReads }
 func LogFrameWrites() bool { return logFrameWrites }
-
-const GoAwayTimeout = 25 * time.Millisecond
 
 func init() {
 	goAwayTimeout = GoAwayTimeout

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !(go1.27 && http2wrap)
+
 // TODO: turn off the serve goroutine when idle, so
 // an idle conn only has the readFrames goroutine active. (which could
 // also be optimized probably to pin less memory in crypto/tls). This
@@ -95,6 +97,9 @@ type serverInternalState struct {
 	// Pool of error channels. This is per-Server rather than global
 	// because channels can't be reused across synctest bubbles.
 	errChanPool sync.Pool
+
+	// Used in tests.
+	testNewConn func(*serverConn)
 }
 
 func (s *serverInternalState) registerConn(sc *serverConn) {
@@ -286,6 +291,9 @@ func (s *Server) serveConn(c net.Conn, opts *ServeConnOpts, newf func(*serverCon
 	}
 	if newf != nil {
 		newf(sc)
+	}
+	if s.state != nil && s.state.testNewConn != nil {
+		s.state.testNewConn(sc)
 	}
 
 	s.state.registerConn(sc)

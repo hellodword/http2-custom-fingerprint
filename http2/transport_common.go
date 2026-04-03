@@ -310,9 +310,7 @@ func (t *Transport) roundTripViaPool(req *http.Request, opt RoundTripOpt, pool C
 			//
 			// If the timer has already fired and we're racing it, the redundant
 			// call to MarkDead is harmless.
-			if cc.idleTimer != nil {
-				cc.idleTimer.Stop()
-			}
+			cc.stopIdleTimer()
 			pool.MarkDead(cc)
 		}
 		if err != nil {

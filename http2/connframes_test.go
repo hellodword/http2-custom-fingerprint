@@ -366,6 +366,14 @@ func (tf *testConnFramer) writeHeaders(p HeadersFrameParam) {
 	}
 }
 
+type headerType int
+
+const (
+	noHeader headerType = iota // omitted
+	oneHeader
+	splitHeader // broken into continuation on purpose
+)
+
 // writeHeadersMode writes header frames, as modified by mode:
 //
 //   - noHeader: Don't write the header.

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !(go1.27 && http2wrap)
+
 package http2_test
 
 import (
@@ -997,14 +999,6 @@ func TestTransportConnectRequest(t *testing.T) {
 		}
 	}
 }
-
-type headerType int
-
-const (
-	noHeader headerType = iota // omitted
-	oneHeader
-	splitHeader // broken into continuation on purpose
-)
 
 const (
 	f0 = noHeader

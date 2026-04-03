@@ -24,7 +24,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"golang.org/x/net/http2"
 	. "golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
 	"golang.org/x/net/internal/gate"
@@ -326,10 +325,10 @@ func (b *testRequestBody) closeWithError(err error) {
 func (tc *testClientConn) roundTrip(req *http.Request) *testRoundTrip {
 	rt := &testRoundTrip{}
 	rt.do(tc.t, req, func(req *http.Request) (*http.Response, error) {
-		if tc.cc1 != nil {
-			return tc.cc1.RoundTrip(req)
-		}
-		return tc.cc.TestRoundTrip(req, func(streamID uint32) {
+		// doRoundTrip will pick a way to make a RoundTrip call
+		// depending on the Go version and whether we're
+		// wrapping the net/http implementation or using the one in this package.
+		return tc.doRoundTrip(req, func(streamID uint32) {
 			rt.id.Store(streamID)
 		})
 	})
@@ -390,17 +389,6 @@ func (tc *testClientConn) makeHeaderBlockFragment(s ...string) []byte {
 		tc.enc.WriteField(hpack.HeaderField{Name: s[i], Value: s[i+1]})
 	}
 	return tc.encbuf.Bytes()
-}
-
-// inflowWindow returns the amount of inbound flow control available for a stream,
-// or for the connection if streamID is 0.
-func (tc *testClientConn) inflowWindow(streamID uint32) int32 {
-	synctest.Wait()
-	w, err := tc.cc.TestInflowWindow(streamID)
-	if err != nil {
-		tc.t.Error(err)
-	}
-	return w
 }
 
 // testRoundTrip manages a RoundTrip in progress.
@@ -580,6 +568,10 @@ type testPendingClientConn struct {
 }
 
 func newTestTransport(t testing.TB, opts ...any) *testTransport {
+	if wrappedAPI {
+		t.Fatal("TODO")
+	}
+
 	tt := &testTransport{
 		t:    t,
 		li:   newSynctestNetListener(),
@@ -644,13 +636,9 @@ func newTestTransport(t testing.TB, opts ...any) *testTransport {
 
 	go tt.accept()
 
-	tt.tr.TestSetNewClientConnHook(func(cc *http2.ClientConn) {
-		nc, ok := cc.TestNetConn().(*synctestNetConn)
-		if !ok {
-			return
-		}
-		tt.addPending(nc.peer, cc, nil)
-	})
+	// Install internal hooks when using the HTTP/2 implementation in this package.
+	// This is a no-op when wrapping net/http's imeplementation.
+	tt.maybeAddNewClientConnHook()
 
 	t.Cleanup(func() {
 		tt.li.Close()

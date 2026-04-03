@@ -4,6 +4,8 @@
 
 //go:build !go1.26
 
+// Go 1.25 and earlier: No http.ClientConn support.
+
 package http2_test
 
 import (
@@ -34,4 +36,8 @@ func newTestClientConn(t testing.TB, opts ...any) *testClientConn {
 	}
 
 	return tt.getConn()
+}
+
+func (tc *testClientConn) doRoundTrip(req *http.Request, f func(streamID uint32)) (*http.Response, error) {
+	return tc.cc.TestRoundTrip(req, f)
 }

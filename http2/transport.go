@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build !(go1.27 && http2wrap)
+
 // Transport code.
 
 package http2
@@ -590,8 +592,7 @@ func (cc *ClientConn) healthCheck() {
 	}
 }
 
-// SetDoNotReuse marks cc as not reusable for future HTTP requests.
-func (cc *ClientConn) SetDoNotReuse() {
+func (cc *ClientConn) setDoNotReuse() {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	cc.doNotReuse = true
@@ -632,21 +633,13 @@ func (cc *ClientConn) setGoAway(f *GoAwayFrame) {
 	}
 }
 
-// CanTakeNewRequest reports whether the connection can take a new request,
-// meaning it has not been closed or received or sent a GOAWAY.
-//
-// If the caller is going to immediately make a new request on this
-// connection, use ReserveNewRequest instead.
-func (cc *ClientConn) CanTakeNewRequest() bool {
+func (cc *ClientConn) canTakeNewRequest() bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	return cc.canTakeNewRequestLocked()
 }
 
-// ReserveNewRequest is like CanTakeNewRequest but also reserves a
-// concurrent stream in cc. The reservation is decremented on the
-// next call to RoundTrip.
-func (cc *ClientConn) ReserveNewRequest() bool {
+func (cc *ClientConn) reserveNewRequest() bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 	if st := cc.idleStateLocked(); !st.canTakeNewRequest {
@@ -656,8 +649,7 @@ func (cc *ClientConn) ReserveNewRequest() bool {
 	return true
 }
 
-// State returns a snapshot of cc's state.
-func (cc *ClientConn) State() ClientConnState {
+func (cc *ClientConn) state() ClientConnState {
 	cc.wmu.Lock()
 	maxConcurrent := cc.maxConcurrentStreams
 	if !cc.seenSettings {
@@ -828,6 +820,12 @@ func (cc *ClientConn) closeIfIdle() {
 	cc.closeConn()
 }
 
+func (cc *ClientConn) stopIdleTimer() {
+	if cc.idleTimer != nil {
+		cc.idleTimer.Stop()
+	}
+}
+
 func (cc *ClientConn) isDoNotReuseAndIdle() bool {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
@@ -836,8 +834,7 @@ func (cc *ClientConn) isDoNotReuseAndIdle() bool {
 
 var shutdownEnterWaitStateHook = func() {}
 
-// Shutdown gracefully closes the client connection, waiting for running streams to complete.
-func (cc *ClientConn) Shutdown(ctx context.Context) error {
+func (cc *ClientConn) shutdown(ctx context.Context) error {
 	if err := cc.sendGoAway(); err != nil {
 		return err
 	}
@@ -911,10 +908,7 @@ func (cc *ClientConn) closeForError(err error) {
 	cc.closeConn()
 }
 
-// Close closes the client connection immediately.
-//
-// In-flight requests are interrupted. For a graceful shutdown, use Shutdown instead.
-func (cc *ClientConn) Close() error {
+func (cc *ClientConn) close() error {
 	cc.closeForError(errClientConnForceClosed)
 	return nil
 }
@@ -968,11 +962,11 @@ func (cc *ClientConn) decrStreamReservationsLocked() {
 	}
 }
 
-func (cc *ClientConn) RoundTrip(req *http.Request) (*http.Response, error) {
-	return cc.roundTrip(req, nil)
+func (cc *ClientConn) roundTrip(req *http.Request) (*http.Response, error) {
+	return cc.internalRoundTrip(req, nil)
 }
 
-func (cc *ClientConn) roundTrip(req *http.Request, streamf func(*clientStream)) (*http.Response, error) {
+func (cc *ClientConn) internalRoundTrip(req *http.Request, streamf func(*clientStream)) (*http.Response, error) {
 	ctx := req.Context()
 	cs := &clientStream{
 		cc:                   cc,
@@ -2645,7 +2639,7 @@ func (rl *clientConnReadLoop) processResetStream(f *RSTStreamFrame) error {
 }
 
 // Ping sends a PING frame to the server and waits for the ack.
-func (cc *ClientConn) Ping(ctx context.Context) error {
+func (cc *ClientConn) ping(ctx context.Context) error {
 	c := make(chan struct{})
 	// Generate a random payload
 	var p [8]byte
