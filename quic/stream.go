@@ -74,6 +74,7 @@ type Stream struct {
 	outdone      chan struct{}   // closed when all data sent
 
 	// Buffers used for fast path; mutex-guarded, but uncontended in normal operations.
+	inbufmu  sync.Mutex
 	inbuf    []byte // received data
 	inbufoff int    // bytes of inbuf which have been consumed
 
@@ -241,22 +242,34 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 	if s.IsWriteOnly() {
 		return 0, errors.New("read from write-only stream")
 	}
+
+	fastPath := false
+	s.inbufmu.Lock()
 	if len(s.inbuf) > s.inbufoff {
 		// Fast path: If s.inbuf contains unread bytes, return them immediately
 		// without taking a lock.
 		n = copy(b, s.inbuf[s.inbufoff:])
 		s.inbufoff += n
+		fastPath = true
+	}
+	s.inbufmu.Unlock()
+	if fastPath {
 		return n, nil
 	}
+
 	if err := s.ingate.waitAndLock(s.inctx); err != nil {
 		return 0, err
 	}
+
 	if s.inbufoff > 0 {
 		// Discard bytes consumed by the fast path above.
 		s.in.discardBefore(s.in.start + int64(s.inbufoff))
+		s.inbufmu.Lock()
 		s.inbufoff = 0
 		s.inbuf = nil
+		s.inbufmu.Unlock()
 	}
+
 	// bytesRead contains the number of bytes of connection-level flow control to return.
 	// We return flow control for bytes read by this Read call, as well as bytes moved
 	// to the fast-path read buffer (s.inbuf).
@@ -296,10 +309,13 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 		// No need to update stream flow control.
 		return len(b), io.EOF
 	}
+
 	if len(s.inset) > 0 && s.inset[0].start <= s.in.start && s.inset[0].end > s.in.start {
 		// If we have more readable bytes available, put the next chunk of data
 		// in s.inbuf for lock-free reads.
+		s.inbufmu.Lock()
 		s.inbuf = s.in.peek(s.inset[0].end - s.in.start)
+		s.inbufmu.Unlock()
 		bytesRead += int64(len(s.inbuf))
 	}
 	if s.insize == -1 || s.insize > s.inwin {
@@ -310,6 +326,7 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 			s.insendmax.setUnsent()
 		}
 	}
+
 	return len(b), nil
 }
 
@@ -317,11 +334,19 @@ func (s *Stream) Read(b []byte) (n int, err error) {
 //
 // It is not safe to call ReadByte concurrently.
 func (s *Stream) ReadByte() (byte, error) {
+	fastPath := false
+	s.inbufmu.Lock()
+	var readByte byte
 	if len(s.inbuf) > s.inbufoff {
-		b := s.inbuf[s.inbufoff]
+		readByte = s.inbuf[s.inbufoff]
 		s.inbufoff++
-		return b, nil
+		fastPath = true
 	}
+	s.inbufmu.Unlock()
+	if fastPath {
+		return readByte, nil
+	}
+
 	var b [1]byte
 	n, err := s.Read(b[:])
 	if n > 0 {
@@ -778,6 +803,20 @@ func (s *Stream) handleData(off int64, b []byte, fin bool) error {
 		if err := s.conn.handleStreamBytesReceived(added); err != nil {
 			return err
 		}
+	}
+	if len(s.inset) > 0 && s.inset[0].contains(off) {
+		// We've received at least some of this data,
+		// and potentially moved it into s.inbuf
+		// (since it's part of the first range of received data).
+		// Avoid rewriting this data into s.in, since doing so could race
+		// with a reader reading the same data.
+		//
+		// (Note: We could apply additional checks here, to detect the peer
+		// sending us different data than we received the first time.
+		// We currently don't bother.)
+		newOff := min(end, s.inset[0].end)
+		b = b[end-newOff:]
+		off = newOff
 	}
 	s.in.writeAt(b, off)
 	s.inset.add(off, end)

@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"golang.org/x/net/internal/quic/quicwire"
 )
@@ -1525,6 +1527,53 @@ func TestStreamFlushImplicitLargerThanBuffer(t *testing.T) {
 				off:  8,
 				data: want[8:],
 			})
+	})
+}
+
+// Test a race condition where the stream read buffer is rewritten
+// by a resent packet while being read.
+func TestStreamInbufReadRace(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		tc, s := newTestConnAndLocalStream(t, clientSide, bidiStream,
+			permissiveTransportParameters)
+
+		// Read from the stream, one byte at a time.
+		// The first read moves the first chunk of stream data into s.inbuf.
+		s.SetReadContext(t.Context()) // make reads blocking again
+		var wg sync.WaitGroup
+		defer wg.Wait()
+		wg.Go(func() {
+			for {
+				_, err := s.Read(make([]byte, 1))
+				if err != nil {
+					break
+				}
+
+				// This sleep gives the writer below a chance to resend
+				// the stream data. This happens deterministically, because
+				// we're using fake time in a synctest bubble.
+				// The sleep does not create a happens-before relationship.
+				// so the race detector can still catch any missing synchronization.
+				time.Sleep(time.Nanosecond)
+			}
+		})
+
+		// Write the same data frame several times.
+		data := make([]byte, 100)
+		for range 10 {
+			tc.writeFrames(packetType1RTT, debugFrameStream{
+				id:   s.id,
+				off:  0,
+				data: data,
+			})
+			time.Sleep(1 * time.Nanosecond)
+		}
+		// End the stream.
+		tc.writeFrames(packetType1RTT, debugFrameStream{
+			id:  s.id,
+			off: int64(len(data)),
+			fin: true,
+		})
 	})
 }
 
