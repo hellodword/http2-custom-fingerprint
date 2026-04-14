@@ -6,7 +6,6 @@ package quic
 
 import (
 	"bytes"
-	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -33,7 +32,7 @@ func TestConnectDefaultTLSConfig(t *testing.T) {
 }
 
 func TestStreamTransfer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	cli, srv := newLocalConnPair(t, &Config{}, &Config{})
 	data := makeTestData(1 << 20)
 
@@ -71,9 +70,75 @@ func TestStreamTransfer(t *testing.T) {
 	}
 }
 
+func TestStreamCloseWhileWriting(t *testing.T) {
+	ctx := t.Context()
+	cli, srv := newLocalConnPair(t, &Config{}, &Config{})
+	streamc := make(chan *Stream, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		recv, err := srv.AcceptStream(ctx)
+		if err != nil {
+			t.Errorf("AcceptStream: %v", err)
+			return
+		}
+		io.Copy(io.Discard, recv)
+	})
+	wg.Go(func() {
+		send, err := cli.NewSendOnlyStream(ctx)
+		if err != nil {
+			t.Fatalf("NewStream: %v", err)
+		}
+		streamc <- send
+		for {
+			_, err := send.Write([]byte{0})
+			if err != nil {
+				break
+			}
+		}
+	})
+	wg.Go(func() {
+		send := <-streamc
+		send.Close()
+	})
+	wg.Wait()
+}
+
+func TestStreamCloseWhileReading(t *testing.T) {
+	ctx := t.Context()
+	cli, srv := newLocalConnPair(t, &Config{}, &Config{})
+	streamc := make(chan *Stream, 1)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		recv, err := srv.AcceptStream(ctx)
+		if err != nil {
+			t.Errorf("AcceptStream: %v", err)
+			return
+		}
+		streamc <- recv
+		io.Copy(io.Discard, recv)
+	})
+	wg.Go(func() {
+		send, err := cli.NewSendOnlyStream(ctx)
+		if err != nil {
+			t.Fatalf("NewStream: %v", err)
+		}
+		for {
+			_, err := send.Write([]byte{0})
+			if err != nil {
+				break
+			}
+		}
+	})
+	wg.Go(func() {
+		recv := <-streamc
+		recv.Close()
+	})
+	wg.Wait()
+}
+
 func newLocalConnPair(t testing.TB, conf1, conf2 *Config) (clientConn, serverConn *Conn) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	e1 := newLocalEndpoint(t, serverSide, conf1)
 	e2 := newLocalEndpoint(t, clientSide, conf2)
 	conf2 = makeTestConfig(conf2, clientSide)

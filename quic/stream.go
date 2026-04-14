@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 
 	"golang.org/x/net/internal/quic/quicwire"
 )
@@ -72,9 +73,11 @@ type Stream struct {
 	outresetcode uint64          // reset code to send in RESET_STREAM
 	outdone      chan struct{}   // closed when all data sent
 
-	// Unsynchronized buffers, used for lock-free fast path.
-	inbuf     []byte // received data
-	inbufoff  int    // bytes of inbuf which have been consumed
+	// Buffers used for fast path; mutex-guarded, but uncontended in normal operations.
+	inbuf    []byte // received data
+	inbufoff int    // bytes of inbuf which have been consumed
+
+	outbufmu  sync.Mutex
 	outbuf    []byte // written data
 	outbufoff int    // bytes of outbuf which contain data to write
 
@@ -344,12 +347,20 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	if s.IsReadOnly() {
 		return 0, errors.New("write to read-only stream")
 	}
+
+	fastPath := false
+	s.outbufmu.Lock()
 	if len(b) > 0 && len(s.outbuf)-s.outbufoff >= len(b) {
 		// Fast path: The data to write fits in s.outbuf.
 		copy(s.outbuf[s.outbufoff:], b)
 		s.outbufoff += len(b)
+		fastPath = true
+	}
+	s.outbufmu.Unlock()
+	if fastPath {
 		return len(b), nil
 	}
+
 	canWrite := s.outgate.lock()
 	s.flushFastOutputBuffer()
 	for {
@@ -419,10 +430,12 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 		// We set the limit to one less than the send buffer limit (the -1 above)
 		// so that a write which completely fills the buffer will overflow
 		// s.outbuf and trigger a flush.
+		s.outbufmu.Lock()
 		s.outbuf = s.out.availableBuffer()
 		if int64(len(s.outbuf)) > lim {
 			s.outbuf = s.outbuf[:lim]
 		}
+		s.outbufmu.Unlock()
 	}
 	s.outUnlock()
 	return n, nil
@@ -430,17 +443,26 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 
 // WriteByte writes a single byte to the stream.
 func (s *Stream) WriteByte(c byte) error {
+	fastPath := false
+	s.outbufmu.Lock()
 	if s.outbufoff < len(s.outbuf) {
 		s.outbuf[s.outbufoff] = c
 		s.outbufoff++
+		fastPath = true
+	}
+	s.outbufmu.Unlock()
+	if fastPath {
 		return nil
 	}
+
 	b := [1]byte{c}
 	_, err := s.Write(b[:])
 	return err
 }
 
 func (s *Stream) flushFastOutputBuffer() {
+	s.outbufmu.Lock()
+	defer s.outbufmu.Unlock()
 	if s.outbuf == nil {
 		return
 	}
@@ -602,8 +624,10 @@ func (s *Stream) resetInternal(code uint64, userClosed bool) {
 	// extra RESET_STREAM in this case is harmless.
 	s.outreset.set()
 	s.outresetcode = code
+	s.outbufmu.Lock()
 	s.outbuf = nil
 	s.outbufoff = 0
+	s.outbufmu.Unlock()
 	s.out.discardBefore(s.out.end)
 	s.outunsent = rangeset[int64]{}
 	s.outblocked.clear()
