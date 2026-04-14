@@ -249,19 +249,24 @@ func newTestConn(t *testing.T, side connSide, opts ...any) *testConn {
 	return tc
 }
 
-func newTestConnForConn(t *testing.T, endpoint *testEndpoint, conn *Conn) *testConn {
+func newTestConnForConn(t *testing.T, endpoint *testEndpoint, conn *Conn, cids newServerConnIDs) *testConn {
 	t.Helper()
+
 	tc := &testConn{
-		t:          t,
-		endpoint:   endpoint,
-		conn:       conn,
-		peerConnID: testPeerConnID(0),
+		t:        t,
+		endpoint: endpoint,
+		conn:     conn,
 		ignoreFrames: map[byte]bool{
 			frameTypePadding: true, // ignore PADDING by default
 		},
 		cryptoDataOut: make(map[tls.QUICEncryptionLevel][]byte),
 		cryptoDataIn:  make(map[tls.QUICEncryptionLevel][]byte),
 		recvDatagram:  make(chan *datagram),
+	}
+	if cids.srcConnID != nil {
+		tc.peerConnID = bytes.Clone(cids.srcConnID)
+	} else {
+		tc.peerConnID = testPeerConnID(0)
 	}
 	t.Cleanup(tc.cleanup)
 	for _, f := range endpoint.configTestConn {

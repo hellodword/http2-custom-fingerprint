@@ -766,3 +766,67 @@ func testConnIDRetiredConnIDResent(t *testing.T) {
 	}
 	tc.wantIdle("server does not re-retire already retired CID 2")
 }
+
+func TestRejectInitialSrcConnIDTooLong(t *testing.T) {
+	synctest.Test(t, testRejectInitialSrcConnIDTooLong)
+}
+func testRejectInitialSrcConnIDTooLong(t *testing.T) {
+	config := &Config{
+		TLSConfig: newTestTLSConfig(serverSide),
+	}
+	te := newTestEndpoint(t, config)
+	srcID := make([]byte, maxConnIDLen+1) // too long
+	dstID := testLocalConnID(-1)
+	params := defaultTransportParameters()
+	params.initialSrcConnID = srcID
+	initialCrypto := initialClientCrypto(t, te, params)
+
+	te.writeDatagram(&testDatagram{
+		packets: []*testPacket{{
+			ptype:     packetTypeInitial,
+			num:       0,
+			version:   quicVersion1,
+			srcConnID: srcID,
+			dstConnID: dstID,
+			frames: []debugFrame{
+				debugFrameCrypto{
+					data: initialCrypto,
+				},
+			},
+		}},
+		paddedSize: 1200,
+	})
+	te.wantIdle("server should ignore Initial with too-long SCID")
+}
+
+func TestRejectInitialDstConnIDTooLong(t *testing.T) {
+	synctest.Test(t, testRejectInitialDstConnIDTooLong)
+}
+func testRejectInitialDstConnIDTooLong(t *testing.T) {
+	config := &Config{
+		TLSConfig: newTestTLSConfig(serverSide),
+	}
+	te := newTestEndpoint(t, config)
+	srcID := testPeerConnID(0)
+	dstID := make([]byte, maxConnIDLen+1) // too long
+	params := defaultTransportParameters()
+	params.initialSrcConnID = srcID
+	initialCrypto := initialClientCrypto(t, te, params)
+
+	te.writeDatagram(&testDatagram{
+		packets: []*testPacket{{
+			ptype:     packetTypeInitial,
+			num:       0,
+			version:   quicVersion1,
+			srcConnID: srcID,
+			dstConnID: dstID,
+			frames: []debugFrame{
+				debugFrameCrypto{
+					data: initialCrypto,
+				},
+			},
+		}},
+		paddedSize: 1200,
+	})
+	te.wantIdle("server should ignore Initial with too-long DCID")
+}

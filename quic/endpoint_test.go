@@ -335,8 +335,8 @@ func (te *testEndpoint) wantIdle(expectation string) {
 // testEndpointHooks implements endpointTestHooks.
 type testEndpointHooks testEndpoint
 
-func (te *testEndpointHooks) newConn(c *Conn) {
-	tc := newTestConnForConn(te.t, (*testEndpoint)(te), c)
+func (te *testEndpointHooks) newConn(c *Conn, cids newServerConnIDs) {
+	tc := newTestConnForConn(te.t, (*testEndpoint)(te), c, cids)
 	te.conns[c] = tc
 }
 
