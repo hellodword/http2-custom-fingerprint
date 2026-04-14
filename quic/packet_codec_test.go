@@ -75,6 +75,51 @@ func TestParseLongHeaderPacket(t *testing.T) {
 	}
 }
 
+func TestParseInvalidLongHeaderPacket(t *testing.T) {
+	// Baseline successful parse, just to confirm we've got a valid packet to start with.
+	// various bits; version; dcid; srcid; token; length; packet number
+	okPacket := unhex(`c0 00000001 00 00 00 00 00`)
+	if _, n := parseLongHeaderPacket(okPacket, fixedKeys{}, 0); n < 0 {
+		t.Fatalf("parse long header packet: unexpected failure")
+	}
+
+	for _, test := range []struct {
+		desc string
+		p    []byte
+	}{{
+		desc: "fixed bit not set",
+		p:    unhex(`80 00000001 00 00 00 00 00`),
+	}, {
+		desc: "truncated version",
+		p:    unhex(`c0 000000`),
+	}, {
+		desc: "DCID exceeds packet",
+		p:    unhex(`c0 00000001 10 00 00 00 00`),
+	}, {
+		desc: "DCID too long",
+		p:    unhex(`c0 00000001 15000102030405060708090a0b0c0d0e0f1011121314 00 00 00 00`),
+	}, {
+		desc: "SCID exceeds packet",
+		p:    unhex(`c0 00000001 00 10 00 00 00`),
+	}, {
+		desc: "SCID too long",
+		p:    unhex(`c0 00000001 00 15000102030405060708090a0b0c0d0e0f1011121314 00 00 00`),
+	}, {
+		desc: "token exceeds packet",
+		p:    unhex(`c0 00000001 00 00 10 00 00`),
+	}, {
+		desc: "length exceeds packet",
+		p:    unhex(`c0 00000001 00 00 00 10 00`),
+	}} {
+		t.Run(test.desc, func(t *testing.T) {
+			_, n := parseLongHeaderPacket(test.p, fixedKeys{}, 0)
+			if n >= 0 {
+				t.Errorf("parse long header packet: unexpected success")
+			}
+		})
+	}
+}
+
 func TestRoundtripEncodeLongPacket(t *testing.T) {
 	var aes128Keys, aes256Keys, chachaKeys fixedKeys
 	aes128Keys.init(tls.TLS_AES_128_GCM_SHA256, []byte("secret"))
