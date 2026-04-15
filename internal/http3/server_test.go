@@ -973,6 +973,51 @@ func TestServer304NotModified(t *testing.T) {
 	})
 }
 
+func TestServerInvalidPathHeader(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		path string
+	}{{
+		name: "empty",
+		path: "",
+	}, {
+		name: "invalid char",
+		path: "\x00",
+	}, {
+		name: "absolute url",
+		path: "https://example.com/",
+	}} {
+		synctestSubtest(t, test.name, func(t *testing.T) {
+			ts := newTestServer(t, nil)
+			tc := ts.connect()
+			tc.greet()
+
+			reqStream := tc.newStream(streamTypeRequest)
+			reqStream.writeHeaders(requestHeader(http.Header{
+				":path": []string{test.path},
+			}))
+			reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+		})
+	}
+}
+
+func TestServerOptionsMethod(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(http.Header{
+			":method": []string{"OPTIONS"},
+			":path":   []string{"*"},
+		}))
+		reqStream.wantSomeHeaders(http.Header{
+			":status": {"200"},
+		})
+	})
+}
+
 type testServer struct {
 	t  testing.TB
 	s  *server
