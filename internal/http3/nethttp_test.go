@@ -73,7 +73,7 @@ func TestNetHTTPIntegration(t *testing.T) {
 	tr := &http.Transport{TLSClientConfig: newTestTLSConfig()}
 	tr.Protocols = &http.Protocols{}
 	protocolSetHTTP3(tr.Protocols)
-	http3.RegisterTransport(tr)
+	http3.RegisterTransport(tr, http3.TransportOpts{})
 
 	client := &http.Client{
 		Transport: tr,

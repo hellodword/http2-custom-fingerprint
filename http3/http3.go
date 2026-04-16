@@ -27,5 +27,5 @@ func registerHTTP3Server(s *http.Server) <-chan string {
 
 //go:linkname registerHTTP3Transport net/http_test.registerHTTP3Transport
 func registerHTTP3Transport(tr *http.Transport) {
-	RegisterTransport(tr)
+	RegisterTransport(tr, TransportOpts{})
 }
