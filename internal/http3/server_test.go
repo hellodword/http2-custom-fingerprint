@@ -93,6 +93,49 @@ func TestServerHeader(t *testing.T) {
 	})
 }
 
+func TestServerHeaderInvalid(t *testing.T) {
+	tests := []struct {
+		name   string
+		header http.Header
+	}{
+		{
+			name:   "header name with control character",
+			header: http.Header{"name\nevilinjection": {"Value"}},
+		},
+		{
+			name:   "header name with uppercase character",
+			header: http.Header{"nAme": {"Value"}},
+		},
+		{
+			name:   "pseudo-header name with control character",
+			header: http.Header{":path\nevilinjection": {"Value"}},
+		},
+		{
+			name:   "pseudo-header name with uppercase character",
+			header: http.Header{":meThod": {"Value"}},
+		},
+		{
+			name:   "header value with control character",
+			header: http.Header{"name": {"Value\nEvilInjection"}},
+		},
+		{
+			name:   "pseudo-header value with control character",
+			header: http.Header{":method": {"Value\nEvilInjection"}},
+		},
+	}
+	for _, tt := range tests {
+		synctestSubtest(t, tt.name, func(t *testing.T) {
+			ts := newTestServer(t, nil)
+			tc := ts.connect()
+			tc.greet()
+
+			reqStream := tc.newStream(streamTypeRequest)
+			reqStream.writeHeaders(requestHeader(tt.header))
+			reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+		})
+	}
+}
+
 func TestServerPseudoHeader(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +498,7 @@ func TestServerExpect100Continue(t *testing.T) {
 		// Client sends an Expect: 100-continue request.
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Expect": {"100-continue"},
+			"expect": {"100-continue"},
 		}))
 
 		reqStream.wantIdle("stream is idle until server sends an HTTP 100 status")
@@ -487,7 +530,7 @@ func TestServerExpect100ContinueRejected(t *testing.T) {
 		// Client sends an Expect: 100-continue request.
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Expect": {"100-continue"},
+			"expect": {"100-continue"},
 		}))
 
 		// Server rejects it.
@@ -512,7 +555,7 @@ func TestServerNoExpect100ContinueAfterNormalResponse(t *testing.T) {
 		// Client sends an Expect: 100-continue request.
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Expect": {"100-continue"},
+			"expect": {"100-continue"},
 		}))
 		// Client sends a body prematurely. This should not happen, unless a
 		// client misbehaves. We do so here anyways so the server handler can
@@ -552,7 +595,7 @@ func TestServerHandlerReadReqWithNoBody(t *testing.T) {
 		// client indicates a Content-Length of 0.
 		reqStream = tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Content-Length": {"0"},
+			"content-length": {"0"},
 		}))
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
 		reqStream.wantData(serverBody)
@@ -588,7 +631,7 @@ func TestServerHandlerReadTrailer(t *testing.T) {
 
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Trailer": {"Client-Trailer-A, Client-Trailer-B"},
+			"trailer": {"Client-Trailer-A, Client-Trailer-B"},
 		}))
 		reqStream.writeData(body)
 		reqStream.writeHeaders(http.Header{
@@ -628,8 +671,8 @@ func TestServerHandlerReadTrailerNoBody(t *testing.T) {
 
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(http.Header{
-			"Trailer":        {"Client-Trailer-A, Client-Trailer-B"},
-			"Content-Length": {"0"},
+			"trailer":        {"Client-Trailer-A, Client-Trailer-B"},
+			"content-length": {"0"},
 		}))
 		reqStream.writeHeaders(http.Header{
 			"Client-Trailer-A":   {"valuea"},
@@ -820,7 +863,7 @@ func TestServerInfersHeaders(t *testing.T) {
 
 			if tt.does100Continue {
 				reqStream.writeHeaders(requestHeader(http.Header{
-					"Expect": {"100-continue"},
+					"expect": {"100-continue"},
 				}))
 				reqStream.wantIdle("stream is idle until server sends an HTTP 100 status")
 				streamIdle <- true

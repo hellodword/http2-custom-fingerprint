@@ -324,6 +324,29 @@ func (sc *serverConn) handlePushStream(*stream) error {
 	}
 }
 
+// validWireHeaderFieldName reports whether v is a valid header field
+// name (key). See httpguts.ValidHeaderName for the base rules.
+//
+// Further, http3 says:
+// "A request or response containing uppercase characters in field names MUST
+// be treated as malformed."
+//
+// This function does not validate whether a pseudo-header field name is valid.
+func validWireHeaderFieldName(v string) bool {
+	if len(v) == 0 {
+		return false
+	}
+	for _, r := range v {
+		if !httpguts.IsTokenRune(r) {
+			return false
+		}
+		if 'A' <= r && r <= 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 type pseudoHeader struct {
 	method    string
 	scheme    string
@@ -337,12 +360,15 @@ func (sc *serverConn) parseHeader(st *stream) (http.Header, pseudoHeader, error)
 		return nil, pseudoHeader{}, err
 	}
 	if ftype != frameTypeHeaders {
-		return nil, pseudoHeader{}, err
+		return nil, pseudoHeader{}, &streamError{errH3MessageError, "received other frames when expecting HEADERS"}
 	}
 	header := make(http.Header)
 	var pHeader pseudoHeader
 	var dec qpackDecoder
 	if err := dec.decode(st, func(_ indexType, name, value string) error {
+		if !httpguts.ValidHeaderFieldValue(value) {
+			return &streamError{errH3MessageError, "invalid field value"}
+		}
 		switch name {
 		case ":method":
 			pHeader.method = value
@@ -353,6 +379,9 @@ func (sc *serverConn) parseHeader(st *stream) (http.Header, pseudoHeader, error)
 		case ":authority":
 			pHeader.authority = value
 		default:
+			if !validWireHeaderFieldName(name) {
+				return &streamError{errH3MessageError, "invalid field name"}
+			}
 			header.Add(name, value)
 		}
 		return nil
