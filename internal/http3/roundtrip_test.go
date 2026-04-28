@@ -185,22 +185,49 @@ func TestRoundTripMalformedResponses(t *testing.T) {
 	}{{
 		name: "duplicate :status",
 		respHeader: http.Header{
-			":status": []string{"200", "204"},
+			":status": {"200", "204"},
 		},
 	}, {
 		name: "unparsable :status",
 		respHeader: http.Header{
-			":status": []string{"frogpants"},
+			":status": {"frogpants"},
 		},
 	}, {
 		name: "undefined pseudo-header",
 		respHeader: http.Header{
-			":status":  []string{"200"},
-			":unknown": []string{"x"},
+			":status":  {"200"},
+			":unknown": {"x"},
 		},
 	}, {
 		name:       "no :status",
 		respHeader: http.Header{},
+	}, {
+		name: "header name with control character",
+		respHeader: http.Header{
+			":status":             {"200"},
+			"name\nevilinjection": {"Value"},
+		},
+	}, {
+		name: "header name with uppercase character",
+		respHeader: http.Header{
+			":status": {"200"},
+			"nAme":    {"Value"},
+		},
+	}, {
+		name:       "pseudo-header name with control character",
+		respHeader: http.Header{":status\nevilinjection": {"200"}},
+	}, {
+		name:       "pseudo-header name with uppercase character",
+		respHeader: http.Header{":stAtus": {"200"}},
+	}, {
+		name: "header value with control character",
+		respHeader: http.Header{
+			":status": {"200"},
+			"name":    {"Value\nEvilInjection"},
+		},
+	}, {
+		name:       "pseudo-header value with control character",
+		respHeader: http.Header{":status": {"200\nEvilInjection"}},
 	}} {
 		synctestSubtest(t, test.name, func(t *testing.T) {
 			tc := newTestClientConn(t)
@@ -210,7 +237,7 @@ func TestRoundTripMalformedResponses(t *testing.T) {
 			rt := tc.roundTrip(req)
 			st := tc.wantStream(streamTypeRequest)
 			st.wantHeaders(nil)
-			st.writeHeaders(test.respHeader)
+			st.writeHeadersRaw(test.respHeader)
 			rt.wantError("malformed response")
 		})
 	}
@@ -501,7 +528,7 @@ func TestRoundTripReadRespWithNoBody(t *testing.T) {
 		st.wantHeaders(nil)
 		st.writeHeaders(http.Header{
 			":status":        {"200"},
-			"Content-Length": {"0"},
+			"content-length": {"0"},
 		})
 		rt.wantStatus(200)
 		st.wantClosed("request is complete")
@@ -514,7 +541,7 @@ func TestRoundTripReadRespWithNoBody(t *testing.T) {
 		st.wantHeaders(nil)
 		st.writeHeaders(http.Header{
 			":status":        {"200"},
-			"Content-Length": {"1000"},
+			"content-length": {"1000"},
 		})
 		rt.wantStatus(200)
 		st.wantClosed("request is complete")
@@ -602,15 +629,15 @@ func TestRoundTripReadTrailer(t *testing.T) {
 		st.wantHeaders(nil)
 		st.writeHeaders(http.Header{
 			":status": {"200"},
-			"Trailer": {"Server-Trailer-A, Server-Trailer-B", "server-trailer-c"}, // Should be canonicalized.
+			"trailer": {"Server-Trailer-A, Server-Trailer-B", "server-trailer-c"}, // Should be canonicalized.
 		})
 		body := []byte("body from server")
 		st.writeData(body)
 		st.writeHeaders(http.Header{
-			"Server-Trailer-A": {"valuea"},
+			"server-trailer-a": {"valuea"},
 			// Note that Server-Trailer-B is skipped.
-			"Server-Trailer-C":   {"valuec"},
-			"Undeclared-Trailer": {"undeclared"}, // Should be ignored.
+			"server-trailer-c":   {"valuec"},
+			"undeclared-trailer": {"undeclared"}, // Should be ignored.
 		})
 
 		rt.wantStatus(200)
@@ -646,14 +673,14 @@ func TestRoundTripReadTrailerNoBody(t *testing.T) {
 		st.wantHeaders(nil)
 		st.writeHeaders(http.Header{
 			":status":        {"200"},
-			"Content-Length": {"0"},
-			"Trailer":        {"Server-Trailer-A, Server-Trailer-B", "server-trailer-c"}, // Should be canonicalized.
+			"content-length": {"0"},
+			"trailer":        {"Server-Trailer-A, Server-Trailer-B", "server-trailer-c"}, // Should be canonicalized.
 		})
 		st.writeHeaders(http.Header{
-			"Server-Trailer-A": {"valuea"},
+			"server-trailer-a": {"valuea"},
 			// Note that Server-Trailer-B is skipped.
-			"Server-Trailer-C":   {"valuec"},
-			"Undeclared-Trailer": {"undeclared"}, // Should be ignored.
+			"server-trailer-c":   {"valuec"},
+			"undeclared-trailer": {"undeclared"}, // Should be ignored.
 		})
 
 		rt.wantStatus(200)

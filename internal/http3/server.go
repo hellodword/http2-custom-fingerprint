@@ -324,29 +324,6 @@ func (sc *serverConn) handlePushStream(*stream) error {
 	}
 }
 
-// validWireHeaderFieldName reports whether v is a valid header field
-// name (key). See httpguts.ValidHeaderName for the base rules.
-//
-// Further, http3 says:
-// "A request or response containing uppercase characters in field names MUST
-// be treated as malformed."
-//
-// This function does not validate whether a pseudo-header field name is valid.
-func validWireHeaderFieldName(v string) bool {
-	if len(v) == 0 {
-		return false
-	}
-	for _, r := range v {
-		if !httpguts.IsTokenRune(r) {
-			return false
-		}
-		if 'A' <= r && r <= 'Z' {
-			return false
-		}
-	}
-	return true
-}
-
 // hasDisallowedConnectionHeader reports whether h contains connnection headers
 // that are not allowed in HTTP/3:
 //
