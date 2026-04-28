@@ -60,7 +60,7 @@ func TestQPACKEncode(t *testing.T) {
 			"2a94e703626172" +
 			// 7 octet long header name, the smallest number
 			// that does not fit on a 3-bit prefix.
-			"27005a5a5a5a5a5a5a" +
+			"27007a7a7a7a7a7a7a" +
 			// 127 octet long header value, the smallest
 			// number that does not fit on a 7-bit prefix.
 			"7f005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" +

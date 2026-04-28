@@ -277,6 +277,38 @@ func (ts *testQUICStream) writeHeaders(h http.Header) {
 	}
 }
 
+// writeHeadersRaw is just like writeHeaders, but avoids qpackEncoder.encode,
+// which will automatically make sure that headers are encoded correctly, e.g.
+// making field names all lowercase, skipping non-ASCII names.
+// This method can be used to test that we properly reject invalid headers.
+func (ts *testQUICStream) writeHeadersRaw(h http.Header) {
+	ts.t.Helper()
+	var b []byte
+	b = appendPrefixedInt(b, 0, 8, 0) // Required Insert Count
+	b = appendPrefixedInt(b, 0, 7, 0) // Delta Base
+
+	names := slices.Collect(maps.Keys(h))
+	slices.Sort(names)
+	for _, k := range names {
+		for _, v := range h[k] {
+			if i, ok := staticTableByNameValue[tableEntry{k, v}]; ok {
+				b = appendIndexedFieldLine(b, staticTable, i)
+			} else if i, ok := staticTableByName[k]; ok {
+				b = appendLiteralFieldLineWithNameReference(b, staticTable, mayIndex, i, v)
+			} else {
+				b = appendLiteralFieldLineWithLiteralName(b, mayIndex, k, v)
+			}
+		}
+	}
+	headers := b
+	ts.writeVarint(int64(frameTypeHeaders))
+	ts.writeVarint(int64(len(headers)))
+	ts.Write(headers)
+	if err := ts.Flush(); err != nil {
+		ts.t.Fatalf("flushing HEADERS frame: %v", err)
+	}
+}
+
 func (ts *testQUICStream) writeData(b []byte) {
 	ts.t.Helper()
 	ts.writeVarint(int64(frameTypeData))

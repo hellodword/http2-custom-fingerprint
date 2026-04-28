@@ -175,7 +175,7 @@ func TestServerHeaderInvalid(t *testing.T) {
 			tc.greet()
 
 			reqStream := tc.newStream(streamTypeRequest)
-			reqStream.writeHeaders(requestHeader(tt.header))
+			reqStream.writeHeadersRaw(requestHeader(tt.header))
 
 			if tt.wantError {
 				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
