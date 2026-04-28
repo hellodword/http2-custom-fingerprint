@@ -394,18 +394,35 @@ func (sc *serverConn) parseHeader(st *stream) (http.Header, pseudoHeader, error)
 	header := make(http.Header)
 	var pHeader pseudoHeader
 	var dec qpackDecoder
+	var hasMethod, hasScheme, hasPath, hasAuthority bool
 	if err := dec.decode(st, func(_ indexType, name, value string) error {
 		if !httpguts.ValidHeaderFieldValue(value) {
 			return &streamError{errH3MessageError, "invalid field value"}
 		}
 		switch name {
 		case ":method":
+			if hasMethod {
+				return &streamError{errH3MessageError, "duplicate :method"}
+			}
+			hasMethod = true
 			pHeader.method = value
 		case ":scheme":
+			if hasScheme {
+				return &streamError{errH3MessageError, "duplicate :scheme"}
+			}
+			hasScheme = true
 			pHeader.scheme = value
 		case ":path":
+			if hasPath {
+				return &streamError{errH3MessageError, "duplicate :path"}
+			}
+			hasPath = true
 			pHeader.path = value
 		case ":authority":
+			if hasAuthority {
+				return &streamError{errH3MessageError, "duplicate :authority"}
+			}
+			hasAuthority = true
 			pHeader.authority = value
 		default:
 			if !validWireHeaderFieldName(name) {
@@ -422,6 +439,26 @@ func (sc *serverConn) parseHeader(st *stream) (http.Header, pseudoHeader, error)
 	}
 	if hasDisallowedConnectionHeader(header) {
 		return nil, pseudoHeader{}, &streamError{errH3MessageError, "invalid connection-related header"}
+	}
+
+	// "All HTTP/3 requests MUST include exactly one value for the :method,
+	// :scheme, and :path pseudo-header fields, unless the request is a CONNECT
+	// request"
+	//
+	// "A CONNECT request MUST be constructed as follows:
+	// - The :method pseudo-header field is set to "CONNECT"
+	// - The :scheme and :path pseudo-header fields are omitted
+	// - The :authority pseudo-header field contains the host and port to connect to"
+	if !hasMethod {
+		return nil, pseudoHeader{}, &streamError{errH3MessageError, "missing :method"}
+	}
+	if pHeader.method != "CONNECT" && (!hasScheme || !hasPath) {
+		return nil, pseudoHeader{}, &streamError{errH3MessageError, "missing :scheme or :path for non-CONNECT requests"}
+	}
+	if pHeader.method == "CONNECT" && (hasScheme || hasPath || !hasAuthority) {
+		return nil, pseudoHeader{}, &streamError{
+			errH3MessageError, "CONNECT request must only have :method and :authority pseudo-headers",
+		}
 	}
 	return header, pHeader, nil
 }

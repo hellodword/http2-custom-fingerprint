@@ -235,6 +235,95 @@ func TestServerPseudoHeader(t *testing.T) {
 	})
 }
 
+func TestServerPseudoHeaderCount(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    http.Header
+		wantError bool
+	}{
+		{
+			name: "missing method pseudo-header",
+			header: http.Header{
+				":scheme":    {"https"},
+				":path":      {"/"},
+				":authority": {"fake.tld:1234"},
+			},
+			wantError: true,
+		},
+		{
+			name: "valid pseudo-headers for non-CONNECT request",
+			header: http.Header{
+				":method": {"GET"},
+				":scheme": {"https"},
+				":path":   {"/"},
+			},
+			wantError: false,
+		},
+		{
+			name: "extraneous pseudo-headers for non-CONNECT request",
+			header: http.Header{
+				":method": {"GET", "GET"}, // Duplicate :method.
+				":scheme": {"https"},
+				":path":   {"/"},
+			},
+			wantError: true,
+		},
+		{
+			name: "missing pseudo-headers for non-CONNECT request",
+			header: http.Header{
+				":method": {"GET", "GET"},
+				":path":   {"/"},
+			},
+			wantError: true,
+		},
+		{
+			name: "valid pseudo-headers for CONNECT request",
+			header: http.Header{
+				":method":    {"CONNECT"},
+				":authority": {"fake.tld:1234"},
+			},
+			wantError: false,
+		},
+		{
+			name: "extraneous pseudo-headers for CONNECT request",
+			header: http.Header{
+				":method":    {"CONNECT"},
+				":authority": {"fake.tld:1234"},
+				":path":      {"/"}, // :path should be omitted.
+			},
+			wantError: true,
+		},
+		{
+			name: "missing pseudo-headers for CONNECT request",
+			header: http.Header{
+				":method": {"CONNECT"},
+			},
+			wantError: true,
+		},
+	}
+	for _, tt := range tests {
+		synctestSubtest(t, tt.name, func(t *testing.T) {
+			body := []byte("some data")
+			ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write(body)
+			}))
+			tc := ts.connect()
+			tc.greet()
+
+			reqStream := tc.newStream(streamTypeRequest)
+			reqStream.writeHeaders(tt.header)
+
+			if tt.wantError {
+				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+			} else {
+				reqStream.wantHeaders(nil)
+				reqStream.wantData(body)
+				reqStream.wantClosed("request is complete")
+			}
+		})
+	}
+}
+
 func TestServerInvalidHeader(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
