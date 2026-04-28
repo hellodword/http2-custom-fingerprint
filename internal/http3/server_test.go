@@ -95,43 +95,95 @@ func TestServerHeader(t *testing.T) {
 
 func TestServerHeaderInvalid(t *testing.T) {
 	tests := []struct {
-		name   string
-		header http.Header
+		name      string
+		header    http.Header
+		wantError bool
 	}{
 		{
-			name:   "header name with control character",
-			header: http.Header{"name\nevilinjection": {"Value"}},
+			name:      "header name with control character",
+			header:    http.Header{"name\nevilinjection": {"Value"}},
+			wantError: true,
 		},
 		{
-			name:   "header name with uppercase character",
-			header: http.Header{"nAme": {"Value"}},
+			name:      "header name with uppercase character",
+			header:    http.Header{"nAme": {"Value"}},
+			wantError: true,
 		},
 		{
-			name:   "pseudo-header name with control character",
-			header: http.Header{":path\nevilinjection": {"Value"}},
+			name:      "pseudo-header name with control character",
+			header:    http.Header{":path\nevilinjection": {"Value"}},
+			wantError: true,
 		},
 		{
-			name:   "pseudo-header name with uppercase character",
-			header: http.Header{":meThod": {"Value"}},
+			name:      "pseudo-header name with uppercase character",
+			header:    http.Header{":meThod": {"Value"}},
+			wantError: true,
 		},
 		{
-			name:   "header value with control character",
-			header: http.Header{"name": {"Value\nEvilInjection"}},
+			name:      "header value with control character",
+			header:    http.Header{"name": {"Value\nEvilInjection"}},
+			wantError: true,
 		},
 		{
-			name:   "pseudo-header value with control character",
-			header: http.Header{":method": {"Value\nEvilInjection"}},
+			name:      "pseudo-header value with control character",
+			header:    http.Header{":method": {"Value\nEvilInjection"}},
+			wantError: true,
+		},
+		{
+			name:      "connection header name",
+			header:    http.Header{"connection": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "keep-alive header name",
+			header:    http.Header{"Keep-Alive": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "proxy-connection header name",
+			header:    http.Header{"proxy-connection": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "transfer-encoding header name",
+			header:    http.Header{"transfer-encoding": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "upgrade header name",
+			header:    http.Header{"upgrade": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "te header name",
+			header:    http.Header{"te": {"foo"}},
+			wantError: true,
+		},
+		{
+			name:      "te header name with trailers value",
+			header:    http.Header{"te": {"trailers"}},
+			wantError: false,
 		},
 	}
 	for _, tt := range tests {
 		synctestSubtest(t, tt.name, func(t *testing.T) {
-			ts := newTestServer(t, nil)
+			body := []byte("some data")
+			ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write(body)
+			}))
 			tc := ts.connect()
 			tc.greet()
 
 			reqStream := tc.newStream(streamTypeRequest)
 			reqStream.writeHeaders(requestHeader(tt.header))
-			reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+
+			if tt.wantError {
+				reqStream.wantError(quic.StreamErrorCode(errH3MessageError))
+			} else {
+				reqStream.wantHeaders(nil)
+				reqStream.wantData(body)
+				reqStream.wantClosed("request is complete")
+			}
 		})
 	}
 }

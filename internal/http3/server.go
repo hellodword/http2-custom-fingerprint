@@ -347,6 +347,35 @@ func validWireHeaderFieldName(v string) bool {
 	return true
 }
 
+// hasDisallowedConnectionHeader reports whether h contains connnection headers
+// that are not allowed in HTTP/3:
+//
+// "An endpoint MUST NOT generate an HTTP/3 field section containing
+// connection-specific fields; any message containing connection-specific
+// fields MUST be treated as malformed."
+//
+// "The only exception to this is the TE header field, which MAY be present in
+// an HTTP/3 request header; when it is, it MUST NOT contain any value other
+// than "trailers"."
+func hasDisallowedConnectionHeader(h http.Header) bool {
+	neverAllowed := []string{
+		"Connection",
+		"Keep-Alive",
+		"Proxy-Connection",
+		"Transfer-Encoding",
+		"Upgrade",
+	}
+	for _, k := range neverAllowed {
+		if _, ok := h[k]; ok {
+			return true
+		}
+	}
+	if te, ok := h["Te"]; ok && (len(te) != 1 || te[0] != "trailers") {
+		return true
+	}
+	return false
+}
+
 type pseudoHeader struct {
 	method    string
 	scheme    string
@@ -390,6 +419,9 @@ func (sc *serverConn) parseHeader(st *stream) (http.Header, pseudoHeader, error)
 	}
 	if err := st.endFrame(); err != nil {
 		return nil, pseudoHeader{}, err
+	}
+	if hasDisallowedConnectionHeader(header) {
+		return nil, pseudoHeader{}, &streamError{errH3MessageError, "invalid connection-related header"}
 	}
 	return header, pHeader, nil
 }
