@@ -108,8 +108,8 @@ func (w *bodyWriter) Close() error {
 		w.st.writeVarint(int64(len(encTrailer)))
 		w.st.Write(encTrailer)
 	}
-	if w.st != nil && w.st.stream != nil {
-		w.st.stream.CloseWrite()
+	if w.st != nil {
+		w.st.CloseWrite()
 	}
 	return nil
 }
@@ -233,7 +233,7 @@ func (r *bodyReader) Read(p []byte) (n int, err error) {
 func (r *bodyReader) Close() error {
 	// Unlike the HTTP/1 and HTTP/2 body readers (at the time of this comment being written),
 	// calling Close concurrently with Read will interrupt the read.
-	r.st.stream.CloseRead()
+	r.st.CloseRead()
 	// Make sure that any data that has already been written to bodyReader
 	// cannot be read after it has been closed.
 	r.mu.Lock()

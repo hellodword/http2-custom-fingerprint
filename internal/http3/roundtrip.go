@@ -52,11 +52,11 @@ func (rt *roundTripState) abort(err error) error {
 		case *connectionError:
 			rt.cc.abort(e)
 		case *streamError:
-			rt.st.stream.CloseRead()
-			rt.st.stream.Reset(uint64(e.code))
+			rt.st.CloseRead()
+			rt.st.Reset(uint64(e.code))
 		default:
-			rt.st.stream.CloseRead()
-			rt.st.stream.Reset(uint64(errH3NoError))
+			rt.st.CloseRead()
+			rt.st.Reset(uint64(errH3NoError))
 		}
 	})
 	return rt.err
@@ -315,7 +315,7 @@ func (b *transportResponseBody) Close() error {
 	rt.closeReqBody()
 	// Close the request stream, since we're done with the request.
 	// Reset closes the sending half of the stream.
-	rt.st.stream.Reset(uint64(errH3NoError))
+	rt.st.Reset(uint64(errH3NoError))
 	// respBody.Close is responsible for closing the receiving half.
 	err := rt.respBody.Close()
 	if err == nil {

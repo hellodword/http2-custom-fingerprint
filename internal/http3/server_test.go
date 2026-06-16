@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -1231,6 +1232,220 @@ func TestServerOptionsMethod(t *testing.T) {
 		reqStream.wantSomeHeaders(http.Header{
 			":status": {"200"},
 		})
+	})
+}
+
+func TestServerPastWriteDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctl := http.NewResponseController(w)
+			io.WriteString(w, "one")
+			if err := ctl.Flush(); err != nil {
+				t.Errorf("Flush() = %v, want nil", err)
+			}
+			time.Sleep(time.Second) // T+1.
+			// Set past write deadline. Write should fail.
+			if err := ctl.SetWriteDeadline(time.Now().Add(-10 * time.Second)); err != nil {
+				t.Errorf("SetWriteDeadline() = %v, want nil", err)
+			}
+			var err error
+			_, err = io.WriteString(w, "x")
+			if err == nil {
+				err = ctl.Flush()
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got write err %v, want %v", err, os.ErrDeadlineExceeded)
+			}
+
+			// Extending the write deadline after it's exceeded should have no effect (sticky).
+			if err := ctl.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Errorf("SetWriteDeadline() = %v, want nil", err)
+			}
+			_, err = io.WriteString(w, "x")
+			if err == nil {
+				err = ctl.Flush()
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got write err %v (after extend), want %v", err, os.ErrDeadlineExceeded)
+			}
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantData([]byte("one"))
+		time.Sleep(2 * time.Second) // T+2.
+		synctest.Wait()
+		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+	})
+}
+
+func TestServerFutureWriteDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctl := http.NewResponseController(w)
+			io.WriteString(w, "one")
+			if err := ctl.Flush(); err != nil {
+				t.Errorf("Flush() = %v, want nil", err)
+			}
+
+			// Set future deadline at T+1. Write should succeed.
+			if err := ctl.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Errorf("SetWriteDeadline() = %v, want nil", err)
+			}
+			io.WriteString(w, "two")
+			if err := ctl.Flush(); err != nil {
+				t.Errorf("Flush() = %v, want nil", err)
+			}
+
+			// Extend deadline to T+3, before it expires.
+			if err := ctl.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+				t.Errorf("SetWriteDeadline() = %v, want nil", err)
+			}
+			// Sleep till T+2. Write should succeed since the deadline is T+3.
+			time.Sleep(2 * time.Second)
+			io.WriteString(w, "three")
+			if err := ctl.Flush(); err != nil {
+				t.Errorf("Flush() = %v, want nil", err)
+			}
+
+			// Sleep till T+4. Write should fail since deadline is T+3.
+			time.Sleep(2 * time.Second)
+			var err error
+			_, err = io.WriteString(w, "x")
+			if err == nil {
+				err = ctl.Flush()
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got write err %v, want %v", err, os.ErrDeadlineExceeded)
+			}
+
+			// Extending the write deadline after it's exceeded should have no effect (sticky).
+			if err := ctl.SetWriteDeadline(time.Time{}); err != nil {
+				t.Errorf("SetWriteDeadline() = %v, want nil", err)
+			}
+			_, err = io.WriteString(w, "x")
+			if err == nil {
+				err = ctl.Flush()
+			}
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got write err %v (after extend), want %v", err, os.ErrDeadlineExceeded)
+			}
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantData([]byte("one"))
+		reqStream.wantData([]byte("two"))
+		time.Sleep(3 * time.Second) // T+3. After "three" is written.
+		reqStream.wantData([]byte("three"))
+		time.Sleep(3 * time.Second) // T+6. After server exceeds deadline.
+		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+	})
+}
+
+func TestServerPastReadDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctl := http.NewResponseController(w)
+			b := make([]byte, 3)
+			if _, err := io.ReadFull(r.Body, b); err != nil || string(b) != "one" {
+				t.Errorf("Read() got (%q, %v), want (%q, nil)", b, err, "one")
+			}
+			// Set past read deadline. Read should fail.
+			if err := ctl.SetReadDeadline(time.Now().Add(-10 * time.Second)); err != nil {
+				t.Errorf("SetReadDeadline() = %v, want nil", err)
+			}
+			_, err := io.ReadAll(r.Body)
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got read err %v, want %v", err, os.ErrDeadlineExceeded)
+			}
+
+			// Extending the read deadline after it's exceeded should have no effect (sticky).
+			if err := ctl.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+				t.Errorf("SetReadDeadline() = %v, want nil", err)
+			}
+			_, err = io.ReadAll(r.Body)
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got read err %v (after extend), want %v", err, os.ErrDeadlineExceeded)
+			}
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.writeData([]byte("one"))
+		synctest.Wait()
+	})
+}
+
+func TestServerFutureReadDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctl := http.NewResponseController(w)
+			b := make([]byte, 3)
+			if _, err := io.ReadFull(r.Body, b); err != nil || string(b) != "one" {
+				t.Errorf("Read() got (%q, %v), want (%q, nil)", b, err, "one")
+			}
+
+			// Set future deadline at T+2s. Read should succeed.
+			if err := ctl.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Errorf("SetReadDeadline() = %v, want nil", err)
+			}
+			b2 := make([]byte, 3)
+			if _, err := io.ReadFull(r.Body, b2); err != nil || string(b2) != "two" {
+				t.Errorf("Read() got (%q, %v), want (%q, nil)", b2, err, "two")
+			}
+
+			// Extend deadline to T+5s, before it expires.
+			if err := ctl.SetReadDeadline(time.Now().Add(4 * time.Second)); err != nil {
+				t.Errorf("SetReadDeadline() = %v, want nil", err)
+			}
+			// Sleep till T+3. Read should succeed since the deadline is T+5.
+			time.Sleep(2 * time.Second)
+			b3 := make([]byte, 5)
+			if _, err := io.ReadFull(r.Body, b3); err != nil || string(b3) != "three" {
+				t.Errorf("Read() got (%q, %v), want (%q, nil)", b3, err, "three")
+			}
+
+			// Sleep till T+6. Read should fail since deadline has passed.
+			time.Sleep(3 * time.Second)
+			_, err := io.ReadAll(r.Body)
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got read err %v, want %v", err, os.ErrDeadlineExceeded)
+			}
+
+			// Extending the read deadline after it's exceeded should have no effect (sticky).
+			if err := ctl.SetReadDeadline(time.Time{}); err != nil {
+				t.Errorf("SetReadDeadline() = %v, want nil", err)
+			}
+			_, err = io.ReadAll(r.Body)
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Errorf("got read err %v (after extend), want %v", err, os.ErrDeadlineExceeded)
+			}
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.writeData([]byte("one"))
+
+		time.Sleep(time.Second)
+		reqStream.writeData([]byte("two")) // T+1.
+		synctest.Wait()
+
+		time.Sleep(time.Second)
+		reqStream.writeData([]byte("three")) // T+2.
+		synctest.Wait()
+
+		time.Sleep(4 * time.Second) // Advance to T+6 for server handler to complete.
 	})
 }
 

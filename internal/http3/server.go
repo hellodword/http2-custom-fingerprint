@@ -7,11 +7,13 @@ package http3
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
 	"net/textproto"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -812,7 +814,22 @@ func (rw *responseWriter) Write(b []byte) (n int, err error) {
 	return initialBLen, nil
 }
 
-func (rw *responseWriter) Flush() {
+func (rw *responseWriter) SetReadDeadline(deadline time.Time) error {
+	rw.st.readDeadline.set(deadline)
+	return nil
+}
+
+func (rw *responseWriter) SetWriteDeadline(deadline time.Time) error {
+	rw.st.writeDeadline.set(deadline)
+	return nil
+}
+
+func (rw *responseWriter) EnableFullDuplex() error {
+	return nil
+}
+
+func (rw *responseWriter) Flush() { rw.FlushError() }
+func (rw *responseWriter) FlushError() error {
 	// Calling Flush implicitly calls WriteHeader(200) if WriteHeader has not
 	// been called before.
 	rw.WriteHeader(http.StatusOK)
@@ -820,21 +837,31 @@ func (rw *responseWriter) Flush() {
 	defer rw.mu.Unlock()
 	rw.writeHeaderLockedOnce()
 	if !rw.cannotHaveBody {
-		rw.bw.Write(rw.bb)
+		_, err := rw.bw.Write(rw.bb)
 		rw.bb.discard()
+		if err != nil {
+			return err
+		}
 	}
-	rw.st.Flush()
+	return rw.st.Flush()
 }
 
 func (rw *responseWriter) close() error {
-	rw.Flush()
+	retErr := rw.FlushError()
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
+
 	rw.prepareTrailerForWriteLocked()
-	if err := rw.bw.Close(); err != nil {
-		return err
+	if err := rw.bw.Close(); retErr == nil {
+		retErr = err
 	}
-	return rw.st.stream.Close()
+
+	if errors.Is(rw.st.writeDeadline.err(), os.ErrDeadlineExceeded) {
+		rw.st.Reset(uint64(errH3RequestCancelled))
+	} else if err := rw.st.Close(); retErr == nil {
+		retErr = err
+	}
+	return retErr
 }
 
 // defaultBodyBufferCap is the default number of bytes of body that we are
