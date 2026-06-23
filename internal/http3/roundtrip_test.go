@@ -429,7 +429,7 @@ func TestRoundTripExpect100Continue(t *testing.T) {
 			":status": []string{"200"},
 		})
 		st.writeData(serverBody)
-		st.stream.stream.CloseWrite()
+		st.CloseWrite()
 
 		// Client receives the response from server.
 		rt.wantStatus(200)
@@ -478,7 +478,7 @@ func TestRoundTripExpect100ContinueRejected(t *testing.T) {
 		st.wantIdle("client does not send its body without getting status 100")
 		serverBody := []byte("server's body")
 		st.writeData(serverBody)
-		st.stream.stream.CloseWrite()
+		st.CloseWrite()
 
 		rt.wantStatus(200)
 		rt.wantBody(serverBody)
@@ -518,7 +518,7 @@ func TestRoundTripReadRespWithNoBody(t *testing.T) {
 		st.writeHeaders(http.Header{
 			":status": {"200"},
 		})
-		st.stream.stream.CloseWrite()
+		st.CloseWrite()
 		rt.wantStatus(200)
 		st.wantClosed("request is complete")
 
@@ -760,7 +760,7 @@ func TestRoundTrip103EarlyHints(t *testing.T) {
 		})
 		body := []byte("some body")
 		st.writeData(body)
-		st.stream.stream.CloseWrite()
+		st.CloseWrite()
 
 		rt.wantStatus(200)
 		rt.wantBody(body)
@@ -810,7 +810,7 @@ func TestRoundTripGzipEnabled(t *testing.T) {
 				"content-length":   []string{strconv.Itoa(buf.Len())},
 			})
 			st.writeData(buf.Bytes())
-			st.stream.stream.CloseWrite()
+			st.CloseWrite()
 
 			rt.wantStatus(200)
 
@@ -949,7 +949,7 @@ func TestRoundTripGzipWithTrailers(t *testing.T) {
 		st.writeHeaders(http.Header{
 			"server-trailer-a": {"valuea"},
 		})
-		st.stream.stream.CloseWrite()
+		st.CloseWrite()
 
 		rt.wantStatus(200)
 		rt.wantTrailers(http.Header{

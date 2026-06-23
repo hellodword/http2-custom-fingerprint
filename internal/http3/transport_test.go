@@ -459,7 +459,7 @@ func (ts *testQUICStream) wantClosed(reason string) {
 func (ts *testQUICStream) wantError(want quic.StreamErrorCode) {
 	ts.t.Helper()
 	synctest.Wait()
-	_, err := ts.stream.stream.ReadByte()
+	_, err := ts.ReadByte()
 	if err == nil {
 		ts.t.Fatalf("successfully read from stream; want stream error code %v", want)
 	}

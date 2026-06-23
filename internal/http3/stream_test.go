@@ -193,7 +193,7 @@ func TestStreamReadFrameHeaderPartial(t *testing.T) {
 		if err := st1.Flush(); err != nil {
 			t.Fatal(err)
 		}
-		st1.stream.CloseWrite()
+		st1.CloseWrite()
 
 		if _, err := st2.readFrameHeader(); err == nil {
 			t.Fatalf("%v/%v bytes of frame available: st.readFrameHeader() succeeded; want error", i, len(frame))
@@ -206,7 +206,7 @@ func TestStreamReadFrameDataPartial(t *testing.T) {
 	st1.writeVarint(1)          // type
 	st1.writeVarint(100)        // size
 	st1.Write(make([]byte, 50)) // data
-	st1.stream.CloseWrite()
+	st1.CloseWrite()
 	if _, err := st2.readFrameHeader(); err != nil {
 		t.Fatalf("st.readFrameHeader() = %v", err)
 	}
@@ -219,7 +219,7 @@ func TestStreamReadByteFrameDataPartial(t *testing.T) {
 	st1, st2 := newStreamPair(t)
 	st1.writeVarint(1)   // type
 	st1.writeVarint(100) // size
-	st1.stream.CloseWrite()
+	st1.CloseWrite()
 	if _, err := st2.readFrameHeader(); err != nil {
 		t.Fatalf("st.readFrameHeader() = %v", err)
 	}
@@ -242,7 +242,7 @@ func TestStreamReadFrameDataAtEOF(t *testing.T) {
 	}
 
 	st1.Write(data)         // data
-	st1.stream.CloseWrite() // end stream
+	st1.CloseWrite() // end stream
 	got := make([]byte, len(data)+1)
 	if n, err := st2.Read(got); err != nil || n != len(data) || !bytes.Equal(got[:n], data) {
 		t.Fatalf("st.Read() = %v, %v (data=%x); want %v, nil (data=%x)", n, err, got[:n], len(data), data)
@@ -297,7 +297,7 @@ func TestStreamDiscardFrame(t *testing.T) {
 	st1.writeVarint(typ)              // type
 	st1.writeVarint(int64(len(data))) // size
 	st1.Write(data)                   // data
-	st1.stream.CloseWrite()
+	st1.CloseWrite()
 
 	if got, err := st2.readFrameHeader(); err != nil || got != typ {
 		t.Fatalf("st.readFrameHeader() = %v, %v; want %v, nil", got, err, typ)

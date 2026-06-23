@@ -338,6 +338,20 @@ func (st *stream) Flush() error {
 	return st.writeDeadline.errOf(st.stream.Flush())
 }
 
+// WriteByte writes one byte to the stream.
+func (st *stream) WriteByte(c byte) error {
+	// Check the deadline before doing I/O operations on the QUIC layer. We do
+	// this because the QUIC layer implements a fast path for I/O operations,
+	// allowing Read & Write to succeed depending on the state of buffer, even
+	// if its context has been canceled. By always checking the deadline here,
+	// we make it so that I/O operations fail as soon as its relevant deadline
+	// has been exceeded.
+	if err := st.writeDeadline.err(); err != nil {
+		return err
+	}
+	return st.writeDeadline.errOf(st.stream.WriteByte(c))
+}
+
 // readVarint reads a QUIC variable-length integer from the stream.
 func (st *stream) readVarint() (v int64, err error) {
 	b, err := st.ReadByte()
@@ -369,24 +383,24 @@ func readVarint[T ~int64 | ~uint64](st *stream) (T, error) {
 func (st *stream) writeVarint(v int64) {
 	switch {
 	case v <= (1<<6)-1:
-		st.stream.WriteByte(byte(v))
+		st.WriteByte(byte(v))
 	case v <= (1<<14)-1:
-		st.stream.WriteByte((1 << 6) | byte(v>>8))
-		st.stream.WriteByte(byte(v))
+		st.WriteByte((1 << 6) | byte(v>>8))
+		st.WriteByte(byte(v))
 	case v <= (1<<30)-1:
-		st.stream.WriteByte((2 << 6) | byte(v>>24))
-		st.stream.WriteByte(byte(v >> 16))
-		st.stream.WriteByte(byte(v >> 8))
-		st.stream.WriteByte(byte(v))
+		st.WriteByte((2 << 6) | byte(v>>24))
+		st.WriteByte(byte(v >> 16))
+		st.WriteByte(byte(v >> 8))
+		st.WriteByte(byte(v))
 	case v <= (1<<62)-1:
-		st.stream.WriteByte((3 << 6) | byte(v>>56))
-		st.stream.WriteByte(byte(v >> 48))
-		st.stream.WriteByte(byte(v >> 40))
-		st.stream.WriteByte(byte(v >> 32))
-		st.stream.WriteByte(byte(v >> 24))
-		st.stream.WriteByte(byte(v >> 16))
-		st.stream.WriteByte(byte(v >> 8))
-		st.stream.WriteByte(byte(v))
+		st.WriteByte((3 << 6) | byte(v>>56))
+		st.WriteByte(byte(v >> 48))
+		st.WriteByte(byte(v >> 40))
+		st.WriteByte(byte(v >> 32))
+		st.WriteByte(byte(v >> 24))
+		st.WriteByte(byte(v >> 16))
+		st.WriteByte(byte(v >> 8))
+		st.WriteByte(byte(v))
 	default:
 		panic("varint too large")
 	}

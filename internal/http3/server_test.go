@@ -429,7 +429,7 @@ func TestServerBody(t *testing.T) {
 		reqStream.writeHeaders(requestHeader(nil))
 		bodyContent := []byte("some body content that should be echoed")
 		reqStream.writeData(bodyContent)
-		reqStream.stream.stream.CloseWrite()
+		reqStream.CloseWrite()
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
 		// Small multiple calls to Write will be coalesced into one DATA frame.
 		reqStream.wantData(append([]byte("/"), bodyContent...))
@@ -672,7 +672,7 @@ func TestServerExpect100Continue(t *testing.T) {
 		reqStream.wantSomeHeaders(http.Header{":status": {"100"}})
 		body := []byte("body that will be echoed back if we get status 100")
 		reqStream.writeData(body)
-		reqStream.stream.stream.CloseWrite()
+		reqStream.CloseWrite()
 
 		// Receive the server's response after sending the body.
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
@@ -726,7 +726,7 @@ func TestServerNoExpect100ContinueAfterNormalResponse(t *testing.T) {
 		// read the request body without hanging, which would normally cause an
 		// HTTP 100 to be sent.
 		reqStream.writeData([]byte("some body"))
-		reqStream.stream.stream.CloseWrite()
+		reqStream.CloseWrite()
 
 		// Verify that no HTTP 100 was sent.
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
@@ -750,7 +750,7 @@ func TestServerHandlerReadReqWithNoBody(t *testing.T) {
 		// client closes the write direction of the stream.
 		reqStream := tc.newStream(streamTypeRequest)
 		reqStream.writeHeaders(requestHeader(nil))
-		reqStream.stream.stream.CloseWrite()
+		reqStream.CloseWrite()
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
 		reqStream.wantData(serverBody)
 		reqStream.wantClosed("request is complete")

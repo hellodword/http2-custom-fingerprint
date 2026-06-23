@@ -224,7 +224,7 @@ func TestReadData(t *testing.T) {
 				case receiveData:
 					t.Logf("receive DATA frame content: size=%v", step.size)
 					for range step.size {
-						st.stream.stream.WriteByte(byte(bytesSent))
+						st.WriteByte(byte(bytesSent))
 						bytesSent++
 					}
 					st.Flush()
@@ -239,7 +239,7 @@ func TestReadData(t *testing.T) {
 					st.Flush()
 				case receiveEOF:
 					t.Logf("receive EOF on request stream")
-					st.stream.stream.CloseWrite()
+					st.CloseWrite()
 				case wantBody:
 					t.Logf("read %v bytes from response body", step.size)
 					want := make([]byte, step.size)

@@ -132,7 +132,7 @@ func TestConnPeerCreatesBadUnidirectionalStream(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := newTestQUICStream(tc.t, newStream(qs))
-		st.stream.stream.Close()
+		st.Close()
 
 		tc.wantClosed("after peer creates and closes uni stream", errH3StreamCreationError)
 	})
