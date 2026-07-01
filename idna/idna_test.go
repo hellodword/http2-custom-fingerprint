@@ -104,5 +104,15 @@ func TestIDNASeparators(t *testing.T) {
 	}
 }
 
-// TODO(nigeltao): test errors, once we've specified when ToASCII and ToUnicode
-// return errors.
+func TestIDNAErrors(t *testing.T) {
+	for _, tc := range []string{
+		"xn--example-.com",
+	} {
+		if got, err := ToASCII(tc); err == nil {
+			t.Errorf("ToASCII(%q) = %q, want error", tc, got)
+		}
+		if got, err := ToUnicode(tc); err == nil {
+			t.Errorf("ToUnicode(%q) = %q, want error", tc, got)
+		}
+	}
+}
