@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1449,6 +1450,163 @@ func TestServerFutureReadDeadline(t *testing.T) {
 	})
 }
 
+func TestServerReadHeaderTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeout := 10 * time.Second
+		ts := newTestServer(t, nil)
+		ts.s.srv1.ReadHeaderTimeout = timeout
+		tc := ts.connect()
+		tc.greet()
+
+		// Write some part of the header, but never finish sending it.
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeVarint(int64(frameTypeHeaders))
+		if err := reqStream.Flush(); err != nil {
+			t.Fatalf("Flush() = %v, want nil", err)
+		}
+
+		// A stream error should be sent to the client as soon as the timeout
+		// is reached. Server handler should not be called.
+		time.Sleep(timeout - 1)
+		reqStream.wantIdle("timeout has not been reached")
+		time.Sleep(1)
+		reqStream.wantError(quic.StreamErrorCode(errH3RequestRejected))
+		if tc.nextHandlerCall() != nil {
+			t.Error("server handler should not be called")
+		}
+	})
+}
+
+func TestServerReadTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeout := 10 * time.Second
+		ts := newTestServer(t, nil)
+		ts.s.srv1.ReadTimeout = timeout
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.writeData([]byte("some body"))
+		call := tc.nextHandlerCall()
+
+		// Read within the server handler should succeed prior to timeout.
+		time.Sleep(timeout - 1)
+		synctest.Wait()
+		if _, err := call.req.Body.Read(make([]byte, 1)); err != nil {
+			t.Errorf("Read() before timeout = %v, want nil", err)
+		}
+
+		// Read within the server handler should fail once timeout is reached.
+		// Stream error should not be sent to the client, as it is up to the
+		// server handler to decide how it wants to deal with its inability to
+		// read the request body.
+		time.Sleep(1)
+		synctest.Wait()
+		if _, err := call.req.Body.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("Read() after timeout = %v, want os.ErrDeadlineExceeded", err)
+		}
+		call.w.Write([]byte("some body"))
+		call.exit()
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantData([]byte("some body"))
+		reqStream.wantClosed("clean close expected")
+	})
+}
+
+func TestServerReadTimeoutInProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeout := 10 * time.Second
+		ts := newTestServer(t, nil)
+		ts.s.srv1.ReadTimeout = timeout
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.Flush()
+		call := tc.nextHandlerCall()
+
+		// Read will block due to the client having sent no body, thus
+		// advancing synctest's time.
+		start := time.Now()
+		_, err := call.req.Body.Read(make([]byte, 1))
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("Read error = %v, want os.ErrDeadlineExceeded", err)
+		}
+		if got, want := time.Since(start), timeout; got != want {
+			t.Errorf("Read blocked for %v, want %v", got, want)
+		}
+		call.exit()
+	})
+}
+
+func TestServerWriteTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeout := 10 * time.Second
+		ts := newTestServer(t, nil)
+		ts.s.srv1.WriteTimeout = timeout
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		call := tc.nextHandlerCall()
+		body := make([]byte, defaultBodyBufferCap+1)
+
+		// Write within the server handler should succeed prior to timeout.
+		time.Sleep(timeout - 1)
+		synctest.Wait()
+		if _, err := call.w.Write(body); err != nil {
+			t.Errorf("Write() before timeout = %v, want nil", err)
+		}
+		call.w.(http.Flusher).Flush()
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantData(body)
+		reqStream.wantIdle("timeout has not been reached")
+
+		// Write within the server handler should fail once timeout is reached.
+		// A stream error should also be sent to the client.
+		time.Sleep(1)
+		synctest.Wait()
+		if _, err := call.w.Write(body); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("Write() after timeout = %v, want os.ErrDeadlineExceeded", err)
+		}
+		call.exit()
+		reqStream.wantError(quic.StreamErrorCode(errH3RequestCancelled))
+	})
+}
+
+func TestServerWriteTimeoutInProgress(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		timeout := 10 * time.Second
+		ts := newTestServer(t, nil)
+		ts.s.srv1.WriteTimeout = timeout
+		tc := ts.connect()
+		tc.greet()
+
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(nil))
+		reqStream.Flush()
+		call := tc.nextHandlerCall()
+
+		// Keep writing body endlessly. Eventually, it will get blocked due to
+		// flow control, and start advancing synctest's time.
+		start := time.Now()
+		var err error
+		for err == nil {
+			_, err = call.w.Write([]byte("endless body"))
+		}
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Errorf("Write error = %v, want os.ErrDeadlineExceeded", err)
+		}
+		if got, want := time.Since(start), timeout; got != want {
+			t.Errorf("Write blocked for %v, want %v", got, want)
+		}
+		call.exit()
+	})
+}
+
 type testServer struct {
 	t  testing.TB
 	s  *server
@@ -1467,19 +1625,41 @@ type testServerConn struct {
 	ts *testServer
 
 	*testQUICConn
-	control *testQUICStream
+	control   *testQUICStream
+	localAddr netip.AddrPort
+}
+
+type testServerHandler struct {
+	ts      *testServer
+	callsMu sync.Mutex
+	calls   []*serverHandlerCall
+}
+
+// serverHandlerCall is a call to testServerHandler's ServeHTTP method.
+type serverHandlerCall struct {
+	w         http.ResponseWriter
+	req       *http.Request
+	closeOnce sync.Once
+	ch        chan func()
 }
 
 func newTestServer(t testing.TB, handler http.Handler) *testServer {
 	t.Helper()
 	ts := &testServer{
 		t: t,
-		s: &server{
-			config: &quic.Config{
-				TLSConfig: testTLSConfig,
-			},
-			handler: handler,
+	}
+	if handler == nil {
+		handler = &testServerHandler{
+			ts:    ts,
+			calls: []*serverHandlerCall{},
+		}
+	}
+	ts.s = &server{
+		config: &quic.Config{
+			TLSConfig: testTLSConfig,
 		},
+		srv1:    &http.Server{},
+		handler: handler,
 	}
 	e := ts.tn.newQUICEndpoint(t, ts.s.config)
 	ts.addr = e.LocalAddr()
@@ -1498,6 +1678,7 @@ func (ts *testServer) connect() *testServerConn {
 	tc := &testServerConn{
 		ts:           ts,
 		testQUICConn: newTestQUICConn(ts.t, qconn),
+		localAddr:    e.LocalAddr(),
 	}
 	synctest.Wait()
 	return tc
@@ -1511,4 +1692,56 @@ func (tc *testServerConn) greet() {
 	tc.control.writeVarint(0) // size
 	tc.control.Flush()
 	synctest.Wait()
+}
+
+// nextHandlerCall returns the next handler call that has been initiated by tc.
+// If there is no handler call, nil is returned.
+func (tc *testServerConn) nextHandlerCall() *serverHandlerCall {
+	h, ok := tc.ts.s.handler.(*testServerHandler)
+	if !ok {
+		tc.t.Fatal("nextHandlerCall is called for a testServer with non-nil handler")
+	}
+	tc.t.Helper()
+	synctest.Wait()
+	h.callsMu.Lock()
+	defer h.callsMu.Unlock()
+	for i, call := range h.calls {
+		if call.req.RemoteAddr == tc.localAddr.String() {
+			h.calls = append(h.calls[:i], h.calls[i+1:]...)
+			return call
+		}
+	}
+	return nil
+}
+
+func (h *testServerHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	call := &serverHandlerCall{
+		w:   w,
+		req: req,
+		ch:  make(chan func()),
+	}
+	h.ts.t.Cleanup(call.exit)
+	h.callsMu.Lock()
+	h.calls = append(h.calls, call)
+	h.callsMu.Unlock()
+	for f := range call.ch {
+		f()
+	}
+}
+
+// do executes f in the handler's goroutine.
+func (call *serverHandlerCall) do(f func(http.ResponseWriter, *http.Request)) {
+	donec := make(chan struct{})
+	call.ch <- func() {
+		defer close(donec)
+		f(call.w, call.req)
+	}
+	<-donec
+}
+
+// exit causes the handler to return.
+func (call *serverHandlerCall) exit() {
+	call.closeOnce.Do(func() {
+		close(call.ch)
+	})
 }

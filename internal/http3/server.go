@@ -29,10 +29,9 @@ import (
 // The zero value for server is a valid server.
 type server struct {
 	// handler to invoke for requests, http.DefaultServeMux if nil.
-	handler http.Handler
-
-	config *quic.Config
-
+	handler    http.Handler
+	config     *quic.Config
+	srv1       *http.Server
 	listenQUIC func(addr string, config *quic.Config) (*quic.Endpoint, error)
 
 	initOnce sync.Once
@@ -101,6 +100,7 @@ func RegisterServer(s *http.Server, opts ServerOpts) {
 		s3 := &server{
 			config:     opts.QUICConfig,
 			listenQUIC: opts.ListenQUIC,
+			srv1:       s,
 			handler:    stdHandler,
 			serveCtx:   stdHandler.BaseContext(),
 		}
@@ -154,7 +154,7 @@ func (s *server) serve(e *quic.Endpoint) error {
 		if err != nil {
 			return err
 		}
-		go s.newServerConn(qconn, s.handler)
+		go s.newServerConn(qconn)
 	}
 }
 
@@ -225,13 +225,42 @@ func (s *server) unregisterConn(sc *serverConn) {
 	}
 }
 
+func (s *server) readHeaderTimeout() time.Duration {
+	if s.srv1 == nil || s.srv1.ReadHeaderTimeout == 0 {
+		return s.readTimeout()
+	}
+	return s.srv1.ReadHeaderTimeout
+}
+
+func (s *server) readTimeout() time.Duration {
+	if s.srv1 == nil {
+		return 0
+	}
+	return s.srv1.ReadTimeout
+}
+
+func (s *server) writeTimeout() time.Duration {
+	if s.srv1 == nil {
+		return 0
+	}
+	return s.srv1.WriteTimeout
+}
+
+// TODO: this is currently unused, enforce it.
+func (s *server) idleTimeout() time.Duration {
+	if s.srv1 == nil || s.srv1.IdleTimeout == 0 {
+		return s.readTimeout()
+	}
+	return s.srv1.IdleTimeout
+}
+
 type serverConn struct {
 	qconn *quic.Conn
+	srv   *server
 
 	genericConn // for handleUnidirectionalStream
 	enc         qpackEncoder
 	dec         qpackDecoder
-	handler     http.Handler
 
 	// For handling shutdown.
 	controlStream      *stream
@@ -240,10 +269,10 @@ type serverConn struct {
 	goawaySent         bool
 }
 
-func (s *server) newServerConn(qconn *quic.Conn, handler http.Handler) {
+func (s *server) newServerConn(qconn *quic.Conn) {
 	sc := &serverConn{
-		qconn:   qconn,
-		handler: handler,
+		qconn: qconn,
+		srv:   s,
 	}
 	s.registerConn(sc)
 	defer s.unregisterConn(sc)
@@ -480,11 +509,27 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 			message: "GOAWAY request with equal or lower ID than the stream has been sent",
 		}
 	}
+
+	readStartTime := time.Now()
+	if t := sc.srv.readHeaderTimeout(); t > 0 {
+		st.readDeadline.set(readStartTime.Add(t))
+	}
 	header, pHeader, err := sc.parseHeader(st)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			return &streamError{
+				code:    errH3RequestRejected,
+				message: "exceeded deadline while parsing header",
+			}
+		}
 		return err
 	}
 
+	if t := sc.srv.readTimeout(); t > 0 {
+		st.readDeadline.set(readStartTime.Add(t))
+	} else {
+		st.readDeadline.set(time.Time{})
+	}
 	reqInfo := httpcommon.NewServerRequest(httpcommon.ServerRequestParam{
 		Method:    pHeader.method,
 		Scheme:    pHeader.scheme,
@@ -544,7 +589,6 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 			enc:    &sc.enc,
 		},
 	}
-	defer rw.close()
 	if reqInfo.NeedsContinue {
 		req.Body.(*bodyReader).send100Continue = func() {
 			rw.WriteHeader(100)
@@ -552,8 +596,11 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 	}
 
 	// TODO: handle panic coming from the HTTP handler.
-	sc.handler.ServeHTTP(rw, req)
-	return nil
+	if t := sc.srv.writeTimeout(); t > 0 {
+		st.writeDeadline.set(time.Now().Add(t))
+	}
+	sc.srv.handler.ServeHTTP(rw, req)
+	return rw.close()
 }
 
 // abort closes the connection with an error.
@@ -847,19 +894,25 @@ func (rw *responseWriter) FlushError() error {
 }
 
 func (rw *responseWriter) close() error {
+	if errors.Is(rw.st.writeDeadline.err(), os.ErrDeadlineExceeded) {
+		return &streamError{
+			code:    errH3RequestCancelled,
+			message: "exceeded deadline while writing response",
+		}
+	}
+
 	retErr := rw.FlushError()
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
-
 	rw.prepareTrailerForWriteLocked()
 	if err := rw.bw.Close(); retErr == nil {
 		retErr = err
 	}
-
-	if errors.Is(rw.st.writeDeadline.err(), os.ErrDeadlineExceeded) {
-		rw.st.Reset(uint64(errH3RequestCancelled))
-	} else if err := rw.st.Close(); retErr == nil {
-		retErr = err
+	if errors.Is(retErr, os.ErrDeadlineExceeded) {
+		return &streamError{
+			code:    errH3RequestCancelled,
+			message: retErr.Error(),
+		}
 	}
 	return retErr
 }
