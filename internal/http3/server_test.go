@@ -682,6 +682,38 @@ func TestServerExpect100Continue(t *testing.T) {
 	})
 }
 
+func TestServerExpect100ContinueSentManually(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(100)
+			body, err := io.ReadAll(r.Body) // Should not send another 100.
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Write(body)
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		// Client sends an Expect: 100-continue request.
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(http.Header{
+			"expect": {"100-continue"},
+		}))
+
+		// Send the body once the server responds with HTTP status 100.
+		reqStream.wantSomeHeaders(http.Header{":status": {"100"}})
+		body := []byte("body that will be echoed back")
+		reqStream.writeData(body)
+		reqStream.CloseWrite()
+
+		// Verify that the server responds with 200, rather than another 100.
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantData(body)
+		reqStream.wantClosed("request is complete")
+	})
+}
+
 func TestServerExpect100ContinueRejected(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rejectBody := []byte("not allowed")
@@ -705,14 +737,17 @@ func TestServerExpect100ContinueRejected(t *testing.T) {
 	})
 }
 
-func TestServerNoExpect100ContinueAfterNormalResponse(t *testing.T) {
+func TestServer100ContinueBodyReadAfterFinalResponse(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(200)
 			w.(http.Flusher).Flush()
-			// This should not cause an HTTP 100 status to be sent since we
+			// Read should not cause an HTTP 100 status to be sent since we
 			// have sent an HTTP 200 response already.
-			io.ReadAll(r.Body)
+			// Read should also return an error and should not hang.
+			if _, err := io.ReadAll(r.Body); err == nil {
+				t.Errorf("got %v, want an error", err)
+			}
 		}))
 		tc := ts.connect()
 		tc.greet()
@@ -722,14 +757,38 @@ func TestServerNoExpect100ContinueAfterNormalResponse(t *testing.T) {
 		reqStream.writeHeaders(requestHeader(http.Header{
 			"expect": {"100-continue"},
 		}))
-		// Client sends a body prematurely. This should not happen, unless a
-		// client misbehaves. We do so here anyways so the server handler can
-		// read the request body without hanging, which would normally cause an
-		// HTTP 100 to be sent.
-		reqStream.writeData([]byte("some body"))
-		reqStream.CloseWrite()
 
 		// Verify that no HTTP 100 was sent.
+		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
+		reqStream.wantClosed("request is complete")
+	})
+}
+
+func TestServer100ContinueBodyReadAfter100AndFinalResponse(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		body := []byte("client body")
+		ts := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(100)
+			w.WriteHeader(200)
+			w.(http.Flusher).Flush()
+			// Allow Read to succeed since the handler has sent 100 prior to 200.
+			if gotBody, err := io.ReadAll(r.Body); err != nil || string(gotBody) != string(body) {
+				t.Errorf("io.ReadAll(r.Body) = %v, %v; want %v, nil", gotBody, err, body)
+			}
+		}))
+		tc := ts.connect()
+		tc.greet()
+
+		// Client sends an Expect: 100-continue request.
+		reqStream := tc.newStream(streamTypeRequest)
+		reqStream.writeHeaders(requestHeader(http.Header{
+			"expect": {"100-continue"},
+		}))
+
+		// Send the body once the server responds with HTTP status 100.
+		reqStream.wantSomeHeaders(http.Header{":status": {"100"}})
+		reqStream.writeData(body)
+		reqStream.CloseWrite()
 		reqStream.wantSomeHeaders(http.Header{":status": {"200"}})
 		reqStream.wantClosed("request is complete")
 	})

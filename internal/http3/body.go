@@ -121,10 +121,6 @@ type bodyReader struct {
 	mu     sync.Mutex
 	remain int64
 	err    error
-	// If not nil, the body contains an "Expect: 100-continue" header, and
-	// send100Continue should be called when Read is invoked for the first
-	// time.
-	send100Continue func()
 	// A map where the key represents the trailer header names we expect. If
 	// there is a HEADERS frame after reading DATA frames to EOF, the value of
 	// the headers will be written here. Keys in the map are assumed to be
@@ -141,10 +137,6 @@ func (r *bodyReader) Read(p []byte) (n int, err error) {
 	// Use a mutex here to provide the same behavior.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.send100Continue != nil {
-		r.send100Continue()
-		r.send100Continue = nil
-	}
 	if r.err != nil {
 		return 0, r.err
 	}

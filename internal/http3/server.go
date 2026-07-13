@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"net/textproto"
@@ -544,20 +543,9 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 		}
 	}
 
-	var body io.ReadCloser
 	contentLength := int64(-1)
 	if n, err := strconv.Atoi(header.Get("Content-Length")); err == nil {
 		contentLength = int64(n)
-	}
-	if contentLength != 0 || len(reqInfo.Trailer) != 0 {
-		body = &bodyReader{
-			st:            st,
-			remain:        contentLength,
-			trailer:       reqInfo.Trailer,
-			filterTrailer: true,
-		}
-	} else {
-		body = http.NoBody
 	}
 
 	req := &http.Request{
@@ -569,11 +557,9 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 		Trailer:       reqInfo.Trailer,
 		ProtoMajor:    3,
 		RemoteAddr:    sc.qconn.RemoteAddr().String(),
-		Body:          body,
 		Header:        header,
 		ContentLength: contentLength,
 	}
-	defer req.Body.Close()
 
 	rw := &responseWriter{
 		st:             st,
@@ -589,10 +575,21 @@ func (sc *serverConn) handleRequestStream(st *stream) error {
 			enc:    &sc.enc,
 		},
 	}
-	if reqInfo.NeedsContinue {
-		req.Body.(*bodyReader).send100Continue = func() {
-			rw.WriteHeader(100)
+
+	if contentLength != 0 || len(reqInfo.Trailer) != 0 {
+		req.Body = &serverRequestReader{
+			rw: rw,
+			br: bodyReader{
+				st:            st,
+				remain:        contentLength,
+				trailer:       reqInfo.Trailer,
+				filterTrailer: true,
+			},
+			needsContinue: reqInfo.NeedsContinue,
 		}
+		defer req.Body.Close()
+	} else {
+		req.Body = http.NoBody
 	}
 
 	// TODO: handle panic coming from the HTTP handler.
@@ -644,8 +641,8 @@ type responseWriter struct {
 	trailer        http.Header
 	bb             bodyBuffer
 	wroteHeader    bool // Non-1xx header has been (logically) written.
-	statusCode     int  // Status of the response that will be sent in HEADERS frame.
-	statusCodeSet  bool // Status of the response has been set via a call to WriteHeader.
+	statusCode     int  // Non-1xx status of the response that will be sent in HEADERS frame. Zero means none has been set.
+	sent100        bool // Status 100 has been sent by the server.
 	cannotHaveBody bool // Response should not have a body (e.g. response to a HEAD request).
 	bodyLenLeft    int  // How much of the content body is left to be sent, set via "Content-Length" header. -1 if unknown.
 }
@@ -726,6 +723,12 @@ func (rw *responseWriter) writeHeaderLocked(statusCode int) {
 	if rw.wroteHeader {
 		return
 	}
+	if statusCode == 100 {
+		if rw.sent100 {
+			return
+		}
+		rw.sent100 = true
+	}
 	encHeaders := rw.bw.enc.encode(func(f func(itype indexType, name, value string)) {
 		f(mayIndex, ":status", strconv.Itoa(statusCode))
 		for name, values := range rw.headers {
@@ -774,7 +777,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	// TODO: handle sending informational status headers (e.g. 103).
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
-	if rw.statusCodeSet {
+	if rw.statusCode != 0 {
 		return
 	}
 	checkWriteHeaderCode(statusCode)
@@ -789,7 +792,6 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 
 	// Non-informational headers should only be set once, and should be
 	// buffered.
-	rw.statusCodeSet = true
 	rw.statusCode = statusCode
 	rw.snapHeaders = rw.headers.Clone()
 	if n, err := strconv.Atoi(rw.Header().Get("Content-Length")); err == nil {
@@ -959,4 +961,43 @@ func (bb *bodyBuffer) inferHeader(h http.Header, status int) {
 	// response body fits within hi.buf and does not require flushing. However,
 	// we have chosen not to do so for now as Content-Length is not very
 	// important for HTTP/3, and such inconsistent behavior might be confusing.
+}
+
+// serverRequestReader wraps around bodyReader, allowing Read and Close calls
+// done from within a server handler to coordinate correctly with the
+// responseWriter; for example, sending status 100 on Read when appropriate.
+type serverRequestReader struct {
+	rw            *responseWriter
+	br            bodyReader
+	needsContinue bool
+}
+
+// maybeSendContinue attempts to send a 100 Continue status code. It
+// ensures that status 100 will only be sent once and when appropriate. If a
+// non-1xx header has been set before 100 was ever set, it also ensures that
+// all subsequent Read will fail.
+func (srr *serverRequestReader) maybeSendContinue() {
+	if !srr.needsContinue {
+		return
+	}
+	srr.rw.mu.Lock()
+	defer srr.rw.mu.Unlock()
+	if srr.rw.sent100 {
+		return
+	}
+	if srr.rw.statusCode != 0 {
+		srr.br.Close()
+		return
+	}
+	srr.rw.writeHeaderLocked(100)
+	srr.rw.st.Flush()
+}
+
+func (srr *serverRequestReader) Read(p []byte) (int, error) {
+	srr.maybeSendContinue()
+	return srr.br.Read(p)
+}
+
+func (srr *serverRequestReader) Close() error {
+	return srr.br.Close()
 }
