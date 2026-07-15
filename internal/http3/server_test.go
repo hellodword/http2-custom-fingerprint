@@ -1667,9 +1667,10 @@ func TestServerWriteTimeoutInProgress(t *testing.T) {
 }
 
 type testServer struct {
-	t  testing.TB
-	s  *server
-	tn testNet
+	t           testing.TB
+	s           *server
+	tn          testNet
+	testHandler *testServerHandler
 	*testQUICEndpoint
 
 	addr netip.AddrPort
@@ -1708,21 +1709,20 @@ func newTestServer(t testing.TB, handler http.Handler) *testServer {
 		t: t,
 	}
 	if handler == nil {
-		handler = &testServerHandler{
+		ts.testHandler = &testServerHandler{
 			ts:    ts,
 			calls: []*serverHandlerCall{},
 		}
+		handler = ts.testHandler
 	}
 	ts.s = &server{
-		config: &quic.Config{
-			TLSConfig: testTLSConfig,
-		},
-		srv1:    &http.Server{},
-		handler: handler,
+		srv1: &http.Server{},
 	}
-	e := ts.tn.newQUICEndpoint(t, ts.s.config)
+	e := ts.tn.newQUICEndpoint(t, &quic.Config{
+		TLSConfig: testTLSConfig,
+	})
 	ts.addr = e.LocalAddr()
-	go ts.s.serve(e)
+	go ts.s.serve(t.Context(), e, handler)
 	return ts
 }
 
@@ -1756,8 +1756,8 @@ func (tc *testServerConn) greet() {
 // nextHandlerCall returns the next handler call that has been initiated by tc.
 // If there is no handler call, nil is returned.
 func (tc *testServerConn) nextHandlerCall() *serverHandlerCall {
-	h, ok := tc.ts.s.handler.(*testServerHandler)
-	if !ok {
+	h := tc.ts.testHandler
+	if h == nil {
 		tc.t.Fatal("nextHandlerCall is called for a testServer with non-nil handler")
 	}
 	tc.t.Helper()

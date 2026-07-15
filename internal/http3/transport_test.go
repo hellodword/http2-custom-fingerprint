@@ -549,15 +549,12 @@ type testClientConn struct {
 func newTestClientConnWithHook(t testing.TB, stateHook func()) *testClientConn {
 	e1, e2 := newQUICEndpointPair(t)
 	tr := &transport{
-		endpoint: e1,
-		config: &quic.Config{
-			TLSConfig: testTLSConfig,
-		},
+		endpoint:    e1,
 		tr1:         new(http.Transport),
 		activeConns: make(map[*clientConn]struct{}),
 	}
 
-	cc, err := tr.dial(t.Context(), e2.LocalAddr().String(), stateHook)
+	cc, err := tr.dial(t.Context(), e2.LocalAddr().String(), testTLSConfig, stateHook)
 	if err != nil {
 		t.Fatal(err)
 	}
