@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"sync"
 	"testing"
@@ -136,6 +137,20 @@ func TestStreamCloseWhileReading(t *testing.T) {
 	wg.Wait()
 }
 
+func TestEndpointClosePacketConn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		e := newTestEndpoint(t, nil)
+
+		// Close the endpoint's PacketConn.
+		udpConn := (*testEndpointUDPConn)(e)
+		udpConn.Close()
+
+		if _, err := e.e.Accept(t.Context()); err == nil {
+			t.Errorf("Accept succeeded; want error")
+		}
+	})
+}
+
 func newLocalConnPair(t testing.TB, conf1, conf2 *Config) (clientConn, serverConn *Conn) {
 	t.Helper()
 	ctx := t.Context()
@@ -187,6 +202,7 @@ func makeTestConfig(conf *Config, side connSide) *Config {
 type testEndpoint struct {
 	t                     *testing.T
 	e                     *Endpoint
+	closeOnce             sync.Once
 	recvc                 chan *datagram
 	idlec                 chan struct{}
 	conns                 map[*Conn]*testConn
@@ -344,7 +360,9 @@ func (te *testEndpointHooks) newConn(c *Conn, cids newServerConnIDs) {
 type testEndpointUDPConn testEndpoint
 
 func (te *testEndpointUDPConn) Close() error {
-	close(te.recvc)
+	te.closeOnce.Do(func() {
+		close(te.recvc)
+	})
 	return nil
 }
 
@@ -352,12 +370,12 @@ func (te *testEndpointUDPConn) LocalAddr() netip.AddrPort {
 	return netip.MustParseAddrPort("127.0.0.1:443")
 }
 
-func (te *testEndpointUDPConn) Read(f func(*datagram)) {
+func (te *testEndpointUDPConn) Read(f func(*datagram)) error {
 	for {
 		select {
 		case d, ok := <-te.recvc:
 			if !ok {
-				return
+				return net.ErrClosed
 			}
 			f(d)
 		case <-te.idlec:
